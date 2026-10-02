@@ -1,0 +1,20 @@
+{
+  // Type checking for editors and `npx tsc`. Run /plugin-types in Claude Code
+  // inside this folder first: it writes Claude Code's API declarations to
+  // .claude/types (ignored by git).
+  "compilerOptions": {
+    "target": "es2023",
+    "lib": ["es2023"],
+    "types": [],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "jsx": "react",
+    "jsxFactory": "h",
+    "jsxFragmentFactory": "Fragment"
+  },
+  "include": ["hooks", "types", ".claude/types"]
+}

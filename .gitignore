@@ -1,0 +1,6 @@
+# Written by Claude Code (/plugin-types) for editor type checking
+.claude-plugin/types/
+plugins/*/.claude-plugin/types/
+.claude/types/
+node_modules/
+.DS_Store
