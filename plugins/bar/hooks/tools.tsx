@@ -3,12 +3,15 @@ import type { Register } from 'claude-code'
 
 import type { ToolCallRecord } from '../types'
 import { clockTime, duration } from './format'
+import { oneClick } from './one-click'
 
 // The Tool calls panel, opened from the count on the bar: one line per call
 // of the running (or last) turn, each opening to its input and output.
 
 const calls = atom({ plugin: 'bar', key: 'calls' } as const, [])
 const openCalls = atom({ plugin: 'bar', key: 'openCalls' } as const, [])
+
+export const TOOLS_PANEL = 'bar-tools'
 
 const STATUS_COLORS: Record<ToolCallRecord['status'], string> = {
   running: 'suggestion',
@@ -18,7 +21,7 @@ const STATUS_COLORS: Record<ToolCallRecord['status'], string> = {
 }
 
 export const registerTools: Register = on => {
-  on('ui.render', { component: 'Pane', requestId: 'bar-tools' }, async ($, e) => {
+  on('ui.render', { component: 'Pane', requestId: TOOLS_PANEL }, async ($, e) => {
     const { Box, Text, Button, Code } = $.ui.resolve(e)
     const list = await read($, calls)
     const open = new Set(await read($, openCalls))
@@ -27,6 +30,7 @@ export const registerTools: Register = on => {
       return <Text dimColor>No tool calls in this turn yet.</Text>
     }
 
+    const bind = oneClick(TOOLS_PANEL)
     const toggle = (id: string) =>
       update($, openCalls, ids => (ids.includes(id) ? ids.filter(other => other !== id) : [...ids, id]))
 
@@ -48,7 +52,7 @@ export const registerTools: Register = on => {
                   label={`${isOpen ? '▾' : '▸'} ${call.tool}`}
                   plain
                   hover={{ scope, underline: true }}
-                  onPress={() => toggle(call.id)}
+                  onPress={bind(`call-${call.id}`, () => toggle(call.id))}
                 />
                 <Box flexGrow={1} flexShrink={1} overflow="hidden">
                   <Text dimColor wrap="truncate-end">

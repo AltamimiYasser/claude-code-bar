@@ -36,6 +36,50 @@ export type ToolCallRecord = {
   ms: number | null
 }
 
+// Bar's settings, from ~/.claude/bar/settings.jsonc (hooks/settings.ts
+// documents each one).
+export type BarSettings = {
+  bar: { enabled: boolean; hover: boolean; pillBorders: boolean }
+  context: { enabled: boolean; limit: number | null; click: 'usage' | 'none' }
+  planLimits: { fiveHour: boolean; weekly: boolean; resetTime: boolean; hoverDetails: boolean; pace: boolean }
+  turn: {
+    enabled: boolean
+    whileWorking: boolean
+    lastTurn: boolean
+    tokens: boolean
+    toolCalls: boolean
+    toolCallsPanel: boolean
+  }
+  answer: { frame: boolean; footer: boolean; footerTokens: boolean }
+  spinnerTimer: boolean
+  remote: {
+    enabled: boolean
+    autoStart: 'never' | 'newProjects' | 'always'
+    notifications: boolean
+    sessionsButton: boolean
+  }
+  levels: { yellow: number; orange: number; red: number }
+}
+
+// Remote Control for this session's folder, as the footer shows it.
+export type RemoteStatus = 'off' | 'starting' | 'on' | 'error'
+export type RemoteState = { status: RemoteStatus; url: string | null; detail: string | null }
+
+// One folder's Remote Control in the Remote sessions panel (or a
+// remote-control process Bar did not start, `isExternal`).
+export type RemoteInstance = {
+  key: string
+  cwd: string | null
+  name: string
+  status: RemoteStatus | 'stopped' | 'stopping'
+  url: string | null
+  detail: string | null
+  pid: number | null
+  startedAt: number | null
+  stoppedAt: number | null
+  isExternal: boolean
+}
+
 // One main-loop turn: what started it, when, and how it ended.
 export type Turn = {
   id: string
@@ -55,12 +99,14 @@ declare module 'claude-code' {
       fill: Fill | null
       limits: Limit[]
       turns: Turn[]
-      now: number
-      live: LiveTurn | null
       // The tool calls of the running turn, or of the last one.
       calls: ToolCallRecord[]
       // Which rows of the Tool calls panel are open, by call id.
       openCalls: string[]
+      remote: RemoteState
+      remoteAll: RemoteInstance[]
+      // The settings file as last read; absent until the first read.
+      settings: BarSettings | null
       // The sample /bar-demo shows instead of the live bar; -1 shows the live one.
       demo: number
     }

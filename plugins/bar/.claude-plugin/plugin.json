@@ -1,6 +1,6 @@
 {
   "name": "bar",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "A status bar above the prompt (context, plan limits, the running turn's time and tokens), and a frame around each final answer",
   "author": {
     "name": "Yasser Altamimi",
@@ -16,15 +16,5 @@
     "timer",
     "mod"
   ],
-  "types": "./types/index.d.ts",
-  "userConfig": {
-    "contextLimit": {
-      "type": "number",
-      "title": "Context limit (tokens)",
-      "description": "Where the context meter is full and red. Capped at the model's own window.",
-      "default": 400000,
-      "min": 10000,
-      "max": 1000000
-    }
-  }
+  "types": "./types/index.d.ts"
 }

@@ -1,8 +1,9 @@
 import { atom, read, update } from 'claude-code'
-import type { Register } from 'claude-code'
+import type { EngineInterface, Register } from 'claude-code'
 
 import type { LiveTurn, ToolCallRecord, Tokens, Turn } from '../types'
 import { clockTime, duration, shortCount } from './format'
+import { DEFAULTS } from './settings'
 
 const KEPT_TURNS = 50
 // Markdown draws at most 10,000 characters; a longer answer keeps the
@@ -13,11 +14,8 @@ const MAX_FRAMED = 9_500
 const ACCENT = 'suggestion'
 
 const turns = atom({ plugin: 'bar', key: 'turns' } as const, [])
-// Ticks once a second while a turn runs; only running rows read it.
-const now = atom({ plugin: 'bar', key: 'now' } as const, 0)
-// The running turn's tokens, for the bar; null between turns.
-const live = atom({ plugin: 'bar', key: 'live' } as const, null)
 const calls = atom({ plugin: 'bar', key: 'calls' } as const, [])
+const settingsAtom = atom({ plugin: 'bar', key: 'settings' } as const, null)
 const openCalls = atom({ plugin: 'bar', key: 'openCalls' } as const, [])
 
 // What the Tool calls panel keeps of each input and output.
@@ -47,8 +45,8 @@ const CHARS_PER_TOKEN = 4
 
 const noTokens = (): Tokens => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 })
 
-// The running turn's tally, kept here and copied into `live` once a second,
-// so a fast stream does not redraw the bar on every piece.
+// The running turn's tally, kept here; the bar reads it when it redraws, so
+// a fast stream does not redraw the bar on every piece.
 let tally = noTokens()
 let streamingChars = 0
 let toolCalls = 0
@@ -69,7 +67,17 @@ const turnForAnswer = (list: Turn[], text: string) => {
     : undefined
 }
 
+
+
 let tick: { cancel: () => void } | null = null
+
+// The running turn's tally as the bar draws it: read straight from this
+// module when the bar redraws, so nothing is written each second.
+export const liveSnapshot = (): LiveTurn => ({
+  tokens: { ...tally },
+  streaming: Math.round(streamingChars / CHARS_PER_TOKEN),
+  tools: toolCalls,
+})
 
 export const registerTurns: Register = on => {
   on('turn.start', async ($, e, next) => {
@@ -84,7 +92,6 @@ export const registerTurns: Register = on => {
       tokens: null,
       tools: 0,
     }
-    await update($, now, () => startedAt)
     await update($, turns, list => [...list, turn].slice(-KEPT_TURNS))
 
     tally = noTokens()
@@ -92,19 +99,14 @@ export const registerTurns: Register = on => {
     toolCalls = 0
     await update($, calls, () => [])
     await update($, openCalls, () => [])
-    await update($, live, () => ({ tokens: noTokens(), streaming: 0, tools: 0 }))
 
     tick?.cancel()
-    tick = $.clock.every(1000, async () => {
-      const at = await $.clock.now()
-      await update($, now, () => at)
-      const sofar: LiveTurn = {
-        tokens: { ...tally },
-        streaming: Math.round(streamingChars / CHARS_PER_TOKEN),
-        tools: toolCalls,
-      }
-      await update($, live, () => sofar)
-    })
+    // A redraw a second while the turn runs, and nothing else: the bar and
+    // the spinner read the clock and the tally themselves when they draw.
+    // (Writing them to state instead made every tick wait for a redraw to
+    // land, a second or more on the desktop, so ticks were skipped and the
+    // timer moved in 2-second steps.)
+    tick = $.clock.every(1000, () => $.ui.invalidate('ui.render'))
 
     return next(e)
   })
@@ -114,7 +116,6 @@ export const registerTurns: Register = on => {
     if (e.agentId === undefined) {
       tick?.cancel()
       tick = null
-      await update($, live, () => null)
       const endedAt = await $.clock.now()
       const tokens = e.usage
         ? {
@@ -215,12 +216,13 @@ export const registerTurns: Register = on => {
   // While the turn runs, the same live count beside the spinner.
   on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
     const running = (await read($, turns)).findLast(turn => turn.endedAt === null)
+    const { spinnerTimer } = (await read($, settingsAtom)) ?? DEFAULTS
 
-    if (!running) {
+    if (!running || !spinnerTimer) {
       return next(e)
     }
 
-    const at = await read($, now)
+    const at = await $.clock.now()
 
     return next({
       ...e,
@@ -229,8 +231,15 @@ export const registerTurns: Register = on => {
   })
 
   // The final answer, framed apart from the work before it; the turn's end
-  // line sits under the frame, closing the turn.
+  // line sits under the frame, closing the turn. Each part is a setting
+  // (`answer`): without the frame the answer draws plain, footer and all.
   on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
+    const { answer } = (await read($, settingsAtom)) ?? DEFAULTS
+
+    if (!answer.frame && !answer.footer) {
+      return next(e)
+    }
+
     const turn = turnForAnswer(await read($, turns), e.props.text)
 
     if (!turn || turn.endedAt === null || e.props.text.length > MAX_FRAMED) {
@@ -243,36 +252,42 @@ export const registerTurns: Register = on => {
 
     return (
       <Box flexDirection="column" marginTop={1}>
-        <Box
-          flexDirection="column"
-          borderStyle="round"
-          borderColor="claude"
-          paddingX={1}
-        >
-          <Text color="claude">✻ Answer</Text>
+        {answer.frame ? (
+          <Box
+            flexDirection="column"
+            borderStyle="round"
+            borderColor="claude"
+            paddingX={1}
+          >
+            <Text color="claude">✻ Answer</Text>
+            <Markdown text={e.props.text} />
+          </Box>
+        ) : (
           <Markdown text={e.props.text} />
-        </Box>
-        <Box marginTop={1} paddingX={1} flexDirection="row" justifyContent="space-between">
-          <Text dimColor>
-            {turn.isAborted ? (
-              <Text color="warning">Interrupted after {duration(turn.endedAt - turn.startedAt)}</Text>
-            ) : (
-              <Text>
-                Done in <Text color={ACCENT}>{duration(turn.endedAt - turn.startedAt)}</Text>
+        )}
+        {answer.footer && (
+          <Box marginTop={1} paddingX={answer.frame ? 1 : 0} flexDirection="row" justifyContent="space-between">
+            <Text dimColor>
+              {turn.isAborted ? (
+                <Text color="warning">Interrupted after {duration(turn.endedAt - turn.startedAt)}</Text>
+              ) : (
+                <Text>
+                  Done in <Text color={ACCENT}>{duration(turn.endedAt - turn.startedAt)}</Text>
+                </Text>
+              )}
+              {'  ·  '}
+              {clockTime(turn.endedAt)}
+            </Text>
+            {answer.footerTokens && tokens && (
+              <Text dimColor>
+                {shortCount(tokens.input)} in{'  ·  '}
+                {shortCount(tokens.output)} out{'  ·  '}
+                {shortCount(tokens.cacheRead)} cache read{'  ·  '}
+                {shortCount(tokens.cacheWrite)} cache write
               </Text>
             )}
-            {'  ·  '}
-            {clockTime(turn.endedAt)}
-          </Text>
-          {tokens && (
-            <Text dimColor>
-              {shortCount(tokens.input)} in{'  ·  '}
-              {shortCount(tokens.output)} out{'  ·  '}
-              {shortCount(tokens.cacheRead)} cache read{'  ·  '}
-              {shortCount(tokens.cacheWrite)} cache write
-            </Text>
-          )}
-        </Box>
+          </Box>
+        )}
       </Box>
     )
   })

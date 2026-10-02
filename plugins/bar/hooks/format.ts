@@ -1,14 +1,16 @@
 // Theme keys, so the engine picks the light or dark shade of each colour
-// from the active theme, including when the theme follows the system.
-const stops = [
-  { below: 0.5, color: 'success' }, // green
-  { below: 0.75, color: 'warning' }, // yellow
-  { below: 1, color: 'claude' }, // orange
-  { below: Infinity, color: 'error' }, // red
-] as const
+// from the active theme, including when the theme follows the system. The
+// share of a limit where each colour starts is a setting (`levels`).
+type Levels = { yellow: number; orange: number; red: number }
 
-export const colorFor = (ratio: number) =>
-  stops.find(stop => ratio < stop.below)?.color ?? 'error'
+export const colorFor = (ratio: number, levels: Levels = { yellow: 0.5, orange: 0.75, red: 1 }) =>
+  ratio >= levels.red
+    ? 'error'
+    : ratio >= levels.orange
+      ? 'claude'
+      : ratio >= levels.yellow
+        ? 'warning'
+        : 'success'
 
 const pad = (n: number) => String(n).padStart(2, '0')
 

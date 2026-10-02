@@ -1,17 +1,20 @@
 import { atom, read, update } from 'claude-code'
 import type {
+  EngineInterface,
   Register,
   SessionContextUsage,
   SessionRateLimit,
 } from 'claude-code'
 
-import type { BarData, Fill, Limit, Tokens, Turn } from '../types'
+import type { BarData, Fill, Limit, BarSettings, Tokens, Turn } from '../types'
 import { colorFor, duration, longDate, resetTime, shortCount, until } from './format'
+import { DEFAULTS, parseJsonc, SETTINGS_FILE, TEMPLATE, toSettings, withLimit } from './settings'
+import { liveSnapshot } from './turns'
 
-// Where the context meter is full and red unless the person set their own
-// (the `contextLimit` setting, or /bar-limit); never past the model's window.
-const DEFAULT_LIMIT = 400_000
+// The smallest limit /bar-limit takes; the largest is the model's window.
 const MIN_LIMIT = 10_000
+// How often the settings file is checked for changes.
+const SETTINGS_POLL_MS = 3_000
 const CONTEXT_CELLS = 18
 const WINDOW_MS: Record<string, number> = {
   five_hour: 5 * 3_600_000,
@@ -24,11 +27,10 @@ const WINDOW_NAMES: Record<string, string> = {
 
 const fill = atom({ plugin: 'bar', key: 'fill' } as const, null)
 const limits = atom({ plugin: 'bar', key: 'limits' } as const, [])
-// The turn timer's values (written by the turn hooks): the bar shows the
-// running turn's time and tokens while Claude works.
+// The turns (written by the turn hooks): the bar shows the running turn's
+// time and tokens while Claude works.
 const turnList = atom({ plugin: 'bar', key: 'turns' } as const, [])
-const tickedAt = atom({ plugin: 'bar', key: 'now' } as const, 0)
-const turnTokens = atom({ plugin: 'bar', key: 'live' } as const, null)
+const settingsAtom = atom({ plugin: 'bar', key: 'settings' } as const, null)
 // Which sample /bar-demo shows in place of the live bar; -1 is the live bar.
 // Starts on the fullest sample, the one with every element in it.
 const DEMO_START = 2
@@ -82,6 +84,14 @@ const samples = (now: number): { label: string; data: BarData }[] => [
 
 const LIMIT_LABELS: Record<string, string> = { five_hour: '5h', seven_day: 'Week' }
 
+// The pill borders' colours, one per level the meters use.
+const TINTS: Record<string, string> = {
+  success: 'rgba(34, 160, 90, 0.28)',
+  warning: 'rgba(202, 138, 4, 0.30)',
+  claude: 'rgba(217, 119, 87, 0.32)',
+  error: 'rgba(220, 38, 38, 0.30)',
+}
+
 // A thin line meter: the used part in the level's colour, the rest a dim track.
 const line = (ratio: number, cells: number) => {
   const used = Math.min(cells, Math.round(Math.min(Math.max(ratio, 0), 1) * cells))
@@ -118,10 +128,44 @@ const toLimits = (windows: SessionRateLimit[]): Limit[] =>
       resetsAt: window.resetsAt ?? null,
     }))
 
-export const registerBand: Register = (on, options) => {
-  const configured =
-    typeof options.contextLimit === 'number' ? options.contextLimit : DEFAULT_LIMIT
+// The settings file's path, and its last-read modification time, so a check
+// reads it again only when it changed.
+let settingsPath: string | null = null
+let settingsMtime = -1
 
+// Reads ~/.claude/bar/settings.jsonc into the shared `settings` value,
+// writing it with every default and its comments when it is missing. A file
+// that does not parse keeps the last good settings and says why, once per
+// change.
+async function loadSettings($: EngineInterface) {
+  if (!settingsPath) {
+    const home = (await $.process.run(['sh', '-c', 'printf %s "$HOME"'])).stdout
+    settingsPath = `${home}/${SETTINGS_FILE}`
+  }
+
+  if (!(await $.fs.exists(settingsPath))) {
+    await $.fs.write(settingsPath, TEMPLATE)
+  }
+
+  const { mtimeMs } = await $.fs.stat(settingsPath)
+
+  if (mtimeMs === settingsMtime) {
+    return
+  }
+
+  settingsMtime = mtimeMs
+
+  try {
+    const next = toSettings(parseJsonc(await $.fs.read(settingsPath)))
+    await update($, settingsAtom, () => next)
+  } catch (error) {
+    $.ui.toast(
+      `Bar settings: ${error instanceof Error ? error.message : 'the file has an error'}; keeping the last good settings`,
+    )
+  }
+}
+
+export const registerBand: Register = on => {
   on('session.start', async ($, e, next) => {
     // Each load starts on the live bar; /bar-demo brings the samples back.
     await update($, demo, () => -1)
@@ -132,12 +176,15 @@ export const registerBand: Register = (on, options) => {
     await $.ui.close({ id: 'bar-agents' })
     await $.command.register({
       name: 'bar-limit',
-      description: 'Set where the context meter turns red, e.g. /bar-limit 300k',
+      description: "Set where the context meter turns red, e.g. /bar-limit 300k (off: the model's window)",
     })
     await $.command.register({
       name: 'bar-demo',
       description: 'Step through sample bars, then back to the live one',
     })
+
+    await loadSettings($)
+    $.clock.every(SETTINGS_POLL_MS, () => void loadSettings($))
 
     const usage = await $.session.usage()
     await update($, fill, () => toFill(usage.context))
@@ -147,23 +194,44 @@ export const registerBand: Register = (on, options) => {
   })
 
   on('command.run', { command: 'bar-limit' }, async ($, e) => {
-    const wanted = parseCount(e.args)
+    const settings = (await read($, settingsAtom)) ?? DEFAULTS
+    const window = (await read($, fill))?.window ?? null
+    const word = e.args.trim().toLowerCase()
+    const current = settings.context.limit
 
-    if (wanted === null) {
+    if (!word) {
       return {
-        text: `The context meter fills at ${shortCount(configured)} tokens. Change it with /bar-limit 300k.`,
+        text:
+          current === null
+            ? `The context meter fills at the model's window${window ? ` (${shortCount(window)})` : ''}. Change it with /bar-limit 300k.`
+            : `The context meter fills at ${shortCount(current)} tokens. /bar-limit off goes back to the model's window.`,
       }
     }
 
-    const window = (await read($, fill))?.window ?? Infinity
-    const limit = Math.max(MIN_LIMIT, Math.min(wanted, window))
-    const result = await $.config.set({ key: 'bar.contextLimit', value: limit })
+    // "off" (or "default", "model", "none") goes back to the model's window.
+    const isOff = ['off', 'default', 'model', 'none'].includes(word)
+    const wanted = isOff ? null : parseCount(word)
+
+    if (!isOff && wanted === null) {
+      return { text: 'Give a token count such as 300k, 1.5m or 250000, or "off" for the model\'s window.' }
+    }
+
+    const limit = wanted === null ? null : Math.max(MIN_LIMIT, window ? Math.min(wanted, window) : wanted)
+    const text = settingsPath && (await $.fs.exists(settingsPath)) ? await $.fs.read(settingsPath) : TEMPLATE
+    const updated = withLimit(text, limit)
+
+    if (!updated || !settingsPath) {
+      return { text: `Couldn't find "limit" in ${SETTINGS_FILE}; set it there by hand.` }
+    }
+
+    await $.fs.write(settingsPath, updated)
+    await loadSettings($)
 
     return {
       text:
-        'deny' in result && result.deny
-          ? `Couldn't change the limit: ${result.deny}`
-          : `The context meter now fills at ${shortCount(limit)} tokens${limit < wanted ? ` (capped at the model's ${shortCount(limit)} window)` : ''}.`,
+        limit === null
+          ? "The context meter now fills at the model's window."
+          : `The context meter now fills at ${shortCount(limit)} tokens${wanted !== null && limit < wanted ? ` (capped at the model's ${shortCount(limit)} window)` : ''}.`,
     }
   })
 
@@ -194,31 +262,40 @@ export const registerBand: Register = (on, options) => {
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (e.props.hasSurvey) {
+    const s: BarSettings = (await read($, settingsAtom)) ?? DEFAULTS
+
+    if (e.props.hasSurvey || !s.bar.enabled) {
       return next(e)
     }
 
     const { Box, Text, Button } = $.ui.resolve(e)
+    const level = (ratio: number) => colorFor(ratio, s.levels)
     const current = await read($, fill)
     const allTurns = await read($, turnList)
     const running = allTurns.findLast(turn => turn.endedAt === null)
     const lastDone = running ? undefined : allTurns.findLast(turn => turn.endedAt !== null)
-    // Read only while a turn runs, so an idle bar does not redraw each second.
-    const elapsed = running ? (await read($, tickedAt)) - running.startedAt : 0
-    const liveTurn = running ? await read($, turnTokens) : null
+    // While a turn runs the turn hooks ask for a redraw each second; the time
+    // and tally are read here, at drawing, so they are current whenever it lands.
+    const elapsed = running ? (await $.clock.now()) - running.startedAt : 0
+    const liveTurn = running ? liveSnapshot() : null
     const now = await $.clock.now()
+    const window = current?.window ?? null
 
     const live: BarData = {
       tokens: current?.tokens ?? 0,
-      limit: Math.min(configured, current?.window ?? configured),
+      // The model's window unless the person set a limit, never past it.
+      limit: s.context.limit === null ? (window ?? 200_000) : Math.min(s.context.limit, window ?? s.context.limit),
       limits: await read($, limits),
     }
 
     // Line 1 is usage, each figure in a pill; line 2 is the turn (live while
-    // Claude works, else the last one). Hovering a pill
-    // shows its detail in line 2's place, which is why line 2 always stays. A
-    // terminal draws a border as three rows, so there the pills go borderless.
+    // Claude works, else the last one). Hovering a pill shows its detail in
+    // line 2's place, which is why line 2 stays while it is on. A terminal
+    // draws a border as three rows, so there the pills go borderless.
     const isFramed = e.surface !== 'terminal'
+    const hasBorders = isFramed && s.bar.pillBorders
+    const hasHover = s.bar.hover
+    const hasDetails = hasHover && s.planLimits.hoverDetails && s.turn.enabled
 
     // A pill's detail, laid over line 2 while the pill is hovered: the same
     // single row, on a solid background, so nothing moves or resizes. (The
@@ -242,38 +319,36 @@ export const registerBand: Register = (on, options) => {
     )
 
     // A pill's border carries its figure's level colour (green, yellow,
-    // orange, red), soft until it nears the limit: from 75% it shows at full
-    // strength.
-    const border = (ratio: number) => ({
-      borderColor: colorFor(ratio),
-      borderDimColor: ratio < 0.75,
-    })
+    // orange, red) at about a third strength: mid-tone colours, mostly
+    // transparent, so the same values read as a light tint on a light and a
+    // dark background alike. (Dimming a theme colour had no visible effect
+    // on the desktop.)
+    const border = (ratio: number) => TINTS[level(ratio)] ?? TINTS.success ?? 'inactive'
 
     const pill = (
       scope: string,
       grow: boolean,
       content: ReturnType<typeof Text> | ReturnType<typeof Box>,
-      edge: { borderColor: string; borderDimColor: boolean },
+      borderColor: string,
     ) => (
       <Box
         key={scope}
         flexGrow={grow ? 1 : 0}
         flexShrink={grow ? 1 : 0}
-        paddingX={isFramed ? 1 : 0}
-        {...(isFramed ? { borderStyle: 'round', ...edge } : {})}
-        hover={isFramed ? { scope, borderColor: 'suggestion' } : { scope }}
+        paddingX={hasBorders ? 1 : 0}
+        {...(hasBorders ? { borderStyle: 'round', borderColor } : {})}
+        {...(hasHover ? { hover: hasBorders ? { scope, borderColor: 'suggestion' } : { scope } } : {})}
       >
         {content}
       </Box>
     )
 
-    const link = (key: string, label: string, onPress: () => unknown, dim = false) => (
+    const link = (key: string, label: string, onPress: () => unknown) => (
       <Button
         key={key}
         label={label}
         plain
-        dimColor={dim}
-        hover={{ scope: `bar-link-${key}`, underline: true, dimColor: false }}
+        {...(hasHover ? { hover: { scope: `bar-link-${key}`, underline: true } } : {})}
         onPress={onPress}
       />
     )
@@ -284,8 +359,8 @@ export const registerBand: Register = (on, options) => {
       const share = resetsAt && span ? (now - (resetsAt - span)) / span : 0
       // Where usage lands at reset if it keeps the pace it has had so far;
       // too early in the window to say anything useful before a tenth of it.
-      const pace = share >= 0.1 ? Math.round(window.percent / share) : null
-      const tint = colorFor(window.percent / 100)
+      const pace = s.planLimits.pace && share >= 0.1 ? Math.round(window.percent / share) : null
+      const tint = level(window.percent / 100)
 
       return overlay(
         `bar-${window.kind}`,
@@ -329,27 +404,36 @@ export const registerBand: Register = (on, options) => {
       </Text>
     )
 
-    const tokenFigures = (tokens: Tokens, streaming = 0) => [
-      figure('in', shortCount(tokens.input), 'in'),
-      figure('out', `${shortCount(tokens.output + streaming)}${streaming > 0 ? '+' : ''}`, 'out'),
-      figure('read', shortCount(tokens.cacheRead), 'cache read'),
-      figure('write', shortCount(tokens.cacheWrite), 'cache write'),
-    ]
+    const tokenFigures = (tokens: Tokens, streaming = 0) =>
+      s.turn.tokens
+        ? [
+            figure('in', shortCount(tokens.input), 'in'),
+            figure('out', `${shortCount(tokens.output + streaming)}${streaming > 0 ? '+' : ''}`, 'out'),
+            figure('read', shortCount(tokens.cacheRead), 'cache read'),
+            figure('write', shortCount(tokens.cacheWrite), 'cache write'),
+          ]
+        : null
 
-    const toolFigure = (tools: number) => (
-      <Box key="tools" flexGrow={1} flexShrink={0} justifyContent="flex-end" paddingLeft={3}>
-        {link(
-          'tools',
-          `${tools} ${tools === 1 ? 'tool call' : 'tool calls'}`,
-          () => $.ui.open({ id: 'bar-tools', title: 'Tool calls', focus: true }),
-        )}
-      </Box>
-    )
+    const toolFigure = (tools: number) => {
+      if (!s.turn.toolCalls) {
+        return null
+      }
+
+      const label = `${tools} ${tools === 1 ? 'tool call' : 'tool calls'}`
+
+      return (
+        <Box key="tools-slot" flexGrow={1} flexShrink={0} justifyContent="flex-end" paddingLeft={3}>
+          {s.turn.toolCallsPanel
+            ? link('tools', label, () => $.ui.open({ id: 'bar-tools', title: 'Tool calls', focus: true }))
+            : figure('tools', String(tools), tools === 1 ? 'tool call' : 'tool calls', true)}
+        </Box>
+      )
+    }
 
     // The turn at the left of line 2, where it stays in view as replies
     // scroll: live while Claude works, else the last finished one.
     const turnLine = () => {
-      if (running) {
+      if (running && s.turn.whileWorking) {
         return [
           <Box key="turn" flexShrink={1} overflow="hidden">
             <Text wrap="truncate-end">
@@ -365,7 +449,7 @@ export const registerBand: Register = (on, options) => {
         ]
       }
 
-      if (lastDone?.endedAt) {
+      if (!running && lastDone?.endedAt && s.turn.lastTurn) {
         const last: Turn = lastDone
 
         return [
@@ -389,69 +473,77 @@ export const registerBand: Register = (on, options) => {
     const bar = (data: BarData) => {
       const ratio = data.tokens / data.limit
       const context = line(ratio, CONTEXT_CELLS)
+      const windows = data.limits.filter(window =>
+        window.kind === 'five_hour' ? s.planLimits.fiveHour : s.planLimits.weekly,
+      )
+      const contextLabel =
+        s.context.click === 'usage' ? (
+          link('context', 'Context', () => $.command.run({ command: 'usage', args: '' }))
+        ) : (
+          <Text key="context-label">Context</Text>
+        )
+      const hasLine1 = s.context.enabled || windows.length > 0
 
       return (
         <Box flexDirection="column">
-          <Box flexDirection="row" columnGap={1}>
-            {pill(
-              'bar-context',
-              true,
-              <Box flexDirection="row">
-                {link('context', 'Context', () => $.command.run({ command: 'usage', args: '' }))}
-                <Box flexShrink={1} height={1} overflow="hidden">
-                <Text wrap="truncate-end">
-                <Text>{'  '}</Text>
-
-                <Text color={colorFor(ratio)}>{context.used}</Text>
-                <Text color={colorFor(ratio)} dimColor>
-                  {context.rest}
-                </Text>
-                <Text color={colorFor(ratio)} bold>
-                  {'  '}
-                  {shortCount(data.tokens)}
-                </Text>
-                <Text color={colorFor(ratio)} dimColor>
-                  {' '}/ {shortCount(data.limit)}
-                </Text>
-                </Text>
-                </Box>
-              </Box>,
-              border(ratio),
-            )}
-            {data.limits.map(window =>
-              pill(
-                `bar-${window.kind}`,
-                false,
-                <Text>
-                  <Text>{LIMIT_LABELS[window.kind]}  </Text>
-                  <Text color={colorFor(window.percent / 100)}>
-                    {Math.round(window.percent)}%
-                  </Text>
-                  {window.resetsAt && (
-                    <Text color={colorFor(window.percent / 100)} dimColor>
-                      {' '}· {resetTime(window.resetsAt, now)}
-                    </Text>
-                  )}
-                </Text>,
-                border(window.percent / 100),
-              ),
-            )}
-          </Box>
-          <Box flexDirection="row" paddingX={isFramed ? 1 : 0} height={1} overflow="hidden">
-            {turnLine()}
-            {/* Last, so they paint over line 2 when shown. */}
-            {data.limits.map(window => windowDetail(window))}
-          </Box>
+          {hasLine1 && (
+            <Box flexDirection="row" columnGap={1}>
+              {s.context.enabled &&
+                pill(
+                  'bar-context',
+                  true,
+                  <Box flexDirection="row">
+                    {contextLabel}
+                    <Box flexShrink={1} height={1} overflow="hidden">
+                      <Text wrap="truncate-end">
+                        <Text>{'  '}</Text>
+                        <Text color={level(ratio)}>{context.used}</Text>
+                        <Text color={level(ratio)} dimColor>
+                          {context.rest}
+                        </Text>
+                        <Text color={level(ratio)} bold>
+                          {'  '}
+                          {shortCount(data.tokens)}
+                        </Text>
+                        <Text color={level(ratio)} dimColor>
+                          {' '}/ {shortCount(data.limit)}
+                        </Text>
+                      </Text>
+                    </Box>
+                  </Box>,
+                  border(ratio),
+                )}
+              {windows.map(window =>
+                pill(
+                  `bar-${window.kind}`,
+                  false,
+                  <Text>
+                    <Text>{LIMIT_LABELS[window.kind]}  </Text>
+                    <Text color={level(window.percent / 100)}>{Math.round(window.percent)}%</Text>
+                    {s.planLimits.resetTime && window.resetsAt && (
+                      <Text color={level(window.percent / 100)} dimColor>
+                        {' '}· {resetTime(window.resetsAt, now)}
+                      </Text>
+                    )}
+                  </Text>,
+                  border(window.percent / 100),
+                ),
+              )}
+            </Box>
+          )}
+          {s.turn.enabled && (
+            <Box flexDirection="row" paddingX={isFramed ? 1 : 0} height={1} overflow="hidden">
+              {turnLine()}
+              {/* Last, so they paint over line 2 when shown. */}
+              {hasDetails && windows.map(window => windowDetail(window))}
+            </Box>
+          )}
         </Box>
       )
     }
 
     const sample = samples(now)[demoIndex(await read($, demo))]
 
-    if (!sample) {
-      return bar(live)
-    }
-
-    return bar(sample.data)
+    return bar(sample ? sample.data : live)
   })
 }
