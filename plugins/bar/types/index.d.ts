@@ -1,19 +1,6 @@
 // The context window's fill as the last response reported it.
 export type Fill = { tokens: number; window: number }
 
-// The folder the session works in, and its git branch when it is a repo:
-// `root` is what a click opens in Finder, `url` the branch on GitHub.
-export type Place = {
-  folder: string
-  root: string
-  branch: string | null
-  url: string | null
-}
-
-
-// Uncommitted work against HEAD: changed files, added and removed lines.
-export type Changes = { files: number; added: number; removed: number }
-
 // A plan usage window (`five_hour`, `seven_day`) as the last response had it.
 export type Limit = { kind: string; percent: number; resetsAt: string | null }
 
@@ -29,10 +16,24 @@ export type Tokens = {
 export type BarData = {
   tokens: number
   limit: number
-  place: Place | null
-  changes: Changes | null
   limits: Limit[]
-  agents: number
+}
+
+// The running turn's tokens so far: exact for each finished model request,
+// plus an estimate of the output still streaming in.
+export type LiveTurn = { tokens: Tokens; streaming: number; tools: number }
+
+// One tool call of the main loop, for the Tool calls panel: what it was,
+// a one-line summary, and its input and output cut to a readable length.
+export type ToolCallRecord = {
+  id: string
+  tool: string
+  summary: string
+  input: string
+  output: string | null
+  status: 'running' | 'done' | 'error' | 'denied'
+  startedAt: number
+  ms: number | null
 }
 
 // One main-loop turn: what started it, when, and how it ended.
@@ -44,21 +45,24 @@ export type Turn = {
   answer: string | null
   isAborted: boolean
   tokens: Tokens | null
+  // How many tools the main loop called in the turn.
+  tools: number
 }
 
 declare module 'claude-code' {
   interface PluginState {
     bar: {
       fill: Fill | null
-      place: Place | null
-      changes: Changes | null
       limits: Limit[]
-      agents: number
       turns: Turn[]
       now: number
+      live: LiveTurn | null
+      // The tool calls of the running turn, or of the last one.
+      calls: ToolCallRecord[]
+      // Which rows of the Tool calls panel are open, by call id.
+      openCalls: string[]
       // The sample /bar-demo shows instead of the live bar; -1 shows the live one.
       demo: number
-      revision: number
     }
   }
 }
