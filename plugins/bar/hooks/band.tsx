@@ -7,7 +7,8 @@ import type {
 } from 'claude-code'
 
 import type { BarData, Fill, Limit, BarSettings, Tokens, Turn } from '../types'
-import { colorFor, duration, longDate, resetTime, shortCount, until } from './format'
+import { cacheExpiry } from './cache'
+import { clockTime, colorFor, countdown, duration, longDate, resetTime, shortCount, until } from './format'
 import { DEFAULTS, parseJsonc, SETTINGS_FILE, TEMPLATE, toSettings, withLimit } from './settings'
 import { liveSnapshot } from './turns'
 
@@ -31,6 +32,23 @@ const limits = atom({ plugin: 'bar', key: 'limits' } as const, [])
 // time and tokens while Claude works.
 const turnList = atom({ plugin: 'bar', key: 'turns' } as const, [])
 const settingsAtom = atom({ plugin: 'bar', key: 'settings' } as const, null)
+const cacheAtom = atom({ plugin: 'bar', key: 'cache' } as const, null)
+const handoffAtom = atom({
+  plugin: 'bar',
+  key: 'handoff',
+} as const, { status: 'idle', path: null, clickedAt: null, turnId: null, detail: null })
+// All as wide as the widest, so the pill keeps its width as they change.
+const HANDOFF_LABELS = {
+  idle: 'Hand off',
+  requested: 'Writing…',
+  writing: 'Writing…',
+  opening: 'Opening…',
+  opened: 'Opened ✓',
+  error: 'Failed',
+} as const
+const HANDOFF_CELLS = Math.max(...Object.values(HANDOFF_LABELS).map(label => label.length))
+// The countdown never needs more than `60:00`.
+const COUNTDOWN_CELLS = 5
 // Which sample /bar-demo shows in place of the live bar; -1 is the live bar.
 // Starts on the fullest sample, the one with every element in it.
 const DEMO_START = 2
@@ -280,6 +298,8 @@ export const registerBand: Register = on => {
     const liveTurn = running ? liveSnapshot() : null
     const now = await $.clock.now()
     const window = current?.window ?? null
+    const cache = s.cache.enabled ? await read($, cacheAtom) : null
+    const handoff = await read($, handoffAtom)
 
     const live: BarData = {
       tokens: current?.tokens ?? 0,
@@ -335,6 +355,9 @@ export const registerBand: Register = on => {
         key={scope}
         flexGrow={grow ? 1 : 0}
         flexShrink={grow ? 1 : 0}
+        // A growing pill gives up its room to the fixed ones, down to nothing,
+        // instead of pushing the row past the edge.
+        {...(grow ? { minWidth: 0, overflow: 'hidden' as const } : {})}
         paddingX={hasBorders ? 1 : 0}
         {...(hasBorders ? { borderStyle: 'round', borderColor } : {})}
         {...(hasHover ? { hover: hasBorders ? { scope, borderColor: 'suggestion' } : { scope } } : {})}
@@ -470,6 +493,80 @@ export const registerBand: Register = on => {
       return null
     }
 
+    // The prompt cache: time left before the conversation drops out of it,
+    // counted from the last response, and the Hand off button beside it.
+    const expiry = cacheExpiry(cache)
+    const cacheSpan = cache ? expiry! - cache.at : 1
+    const cacheLeft = expiry === null ? 0 : expiry - now
+    const cacheRatio = 1 - Math.max(cacheLeft, 0) / cacheSpan
+    const cacheTint = cacheLeft > 0 ? level(cacheRatio) : 'error'
+
+    const cachePill = () =>
+      cache &&
+      pill(
+        'bar-cache',
+        false,
+        <Box flexDirection="row">
+          <Text>Cache  </Text>
+          {/* Fixed widths: the digits change every second, and the app's font gives them different widths. */}
+          <Box width={Math.max(COUNTDOWN_CELLS, 'expired'.length)}>
+            <Text color={cacheTint}>{cacheLeft > 0 ? countdown(cacheLeft) : 'expired'}</Text>
+          </Box>
+          {s.cache.handoff && (
+            <Box flexDirection="row">
+              <Text color={cacheTint} dimColor>
+                {'  ·  '}
+              </Text>
+              <Box width={HANDOFF_CELLS}>
+                {link(
+                  'handoff',
+                  HANDOFF_LABELS[handoff.status],
+                  // The cache hooks start it on their next tick.
+                  () =>
+                    update($, handoffAtom, state =>
+                      state.status === 'idle' || state.status === 'error' || state.status === 'opened'
+                        ? { ...state, status: 'requested' as const }
+                        : state,
+                    ),
+                )}
+              </Box>
+            </Box>
+          )}
+        </Box>,
+        border(cacheLeft > 0 ? cacheRatio : 1),
+      )
+
+    const cacheDetail = () =>
+      cache &&
+      expiry !== null &&
+      overlay(
+        'bar-cache',
+        <Text wrap="truncate-end">
+          <Text bold>Prompt cache</Text>
+          <Text color={cacheTint} dimColor>
+            {'  ·  '}
+            {cache.ttl === '1h' ? '1 hour' : '5 minutes'} from the last response{'  ·  '}
+          </Text>
+          {handoff.status === 'error' ? (
+            <Text color="error">Hand off failed: {handoff.detail}</Text>
+          ) : handoff.status === 'writing' ? (
+            <Text>Writing the handoff, then opening a new session with it</Text>
+          ) : (
+            <Text>
+              <Text color={cacheTint}>
+                {cacheLeft > 0 ? `expires at ${clockTime(expiry, false)}` : `expired at ${clockTime(expiry, false)}`}
+              </Text>
+              {current && (
+                <Text color={cacheTint} dimColor>
+                  {'  ·  '}
+                  {cacheLeft > 0 ? 'then' : 'so'} the next message writes {shortCount(current.tokens)} tokens again
+                </Text>
+              )}
+            </Text>
+          )}
+        </Text>,
+      )
+
     const bar = (data: BarData) => {
       const ratio = data.tokens / data.limit
       const context = line(ratio, CONTEXT_CELLS)
@@ -482,7 +579,7 @@ export const registerBand: Register = on => {
         ) : (
           <Text key="context-label">Context</Text>
         )
-      const hasLine1 = s.context.enabled || windows.length > 0
+      const hasLine1 = s.context.enabled || windows.length > 0 || cache !== null
 
       return (
         <Box flexDirection="column">
@@ -529,6 +626,7 @@ export const registerBand: Register = on => {
                   border(window.percent / 100),
                 ),
               )}
+              {cachePill()}
             </Box>
           )}
           {s.turn.enabled && (
@@ -536,6 +634,7 @@ export const registerBand: Register = on => {
               {turnLine()}
               {/* Last, so they paint over line 2 when shown. */}
               {hasDetails && windows.map(window => windowDetail(window))}
+              {hasHover && s.turn.enabled && cacheDetail()}
             </Box>
           )}
         </Box>

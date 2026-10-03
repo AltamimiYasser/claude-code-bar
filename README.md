@@ -8,6 +8,8 @@ A Claude Code mod that adds a status bar above the prompt, a live timer on every
 
 - **Context:** a meter and the tokens used against the model's context window (or a limit you set), going green → yellow → orange → red. Each pill's border is a faint version of its meter's color. Click **Context** to run `/usage`.
 - **Plan limits:** your 5-hour and weekly usage with their reset times. Hover either one for the exact reset date and whether you're on pace to run out before it resets.
+- **Cache:** how long the conversation stays in the prompt cache, counted down from Claude's last response (1 hour or 5 minutes, whichever the session uses). Once it expires, the next message has to write the whole conversation to the cache again. Hover it for the exact expiry time and how many tokens that would be.
+- **Hand off:** a button inside the Cache pill (or `/bar-handoff`). It runs `/mattpocock-skills:handoff` to write a handoff document, then opens a new Code session in the same folder that continues from it. The current chat stays exactly as it is: it is never cleared or compacted. The desktop app asks you to trust the folder for the new session. When that session runs Bar, it sends the continue prompt by itself; otherwise the prompt is waiting in its message box. Requires the [mattpocock-skills](https://github.com/mattpocock/skills) plugin.
 The app already shows the repo, branch, uncommitted changes and running tasks above the prompt, so Bar leaves those out.
 
 **Every turn**
@@ -54,6 +56,7 @@ Start a new session afterwards.
 | --- | --- |
 | `/bar-limit 300k` | Sets where the context meter is full and turns red. It accepts `300k`, `1.5m` or `250000`, and is capped at the model's own window. `/bar-limit off` goes back to the model's window; `/bar-limit` on its own shows the current value. |
 | `/remote` | Turns Remote Control on or off for this folder, like the footer toggle. `/remote list` opens Remote sessions; `/remote stop-all` stops every running one. |
+| `/bar-handoff` | Writes a handoff and continues in a new session, like the Hand off button. |
 | `/bar-demo` | Steps through sample bars (no plan limits, light use, getting full, past the limit), then back to your live bar. |
 
 ## Settings
@@ -78,6 +81,8 @@ Everything Bar shows can be turned off, in `~/.claude/bar/settings.jsonc`. Bar w
 | `turn.toolCalls` / `toolCallsPanel` | `true` | The tool-call count, and the panel it opens |
 | `answer.frame` / `footer` / `footerTokens` | `true` | The answer frame, the line under it, and its token figures |
 | `spinnerTimer` | `true` | The live time beside the app's working indicator |
+| `cache.enabled` | `true` | The Cache pill |
+| `cache.handoff` | `true` | The Hand off button in it (`/bar-handoff` works either way) |
 | `remote.enabled` | `true` | The Remote Control toggle and `/remote` |
 | `remote.autoStart` | `"newProjects"` | Start Remote Control by itself: `"never"`, `"newProjects"` (a project's first session) or `"always"` |
 | `remote.notifications` | `true` | The on/off notices |

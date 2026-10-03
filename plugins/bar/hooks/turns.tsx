@@ -17,6 +17,14 @@ const turns = atom({ plugin: 'bar', key: 'turns' } as const, [])
 const calls = atom({ plugin: 'bar', key: 'calls' } as const, [])
 const settingsAtom = atom({ plugin: 'bar', key: 'settings' } as const, null)
 const openCalls = atom({ plugin: 'bar', key: 'openCalls' } as const, [])
+// The prompt cache and the Hand off button (hooks/cache.tsx): each response
+// restarts the cache's countdown, and the first turn after a Hand off click
+// is the one writing the handoff.
+const cacheAtom = atom({ plugin: 'bar', key: 'cache' } as const, null)
+const handoffAtom = atom({
+  plugin: 'bar',
+  key: 'handoff',
+} as const, { status: 'idle', path: null, clickedAt: null, turnId: null, detail: null })
 
 // What the Tool calls panel keeps of each input and output.
 const MAX_DETAIL = 4_000
@@ -93,6 +101,10 @@ export const registerTurns: Register = on => {
       tools: 0,
     }
     await update($, turns, list => [...list, turn].slice(-KEPT_TURNS))
+
+    await update($, handoffAtom, state =>
+      state.status === 'writing' && state.turnId === null ? { ...state, turnId: e.turnId } : state,
+    )
 
     tally = noTokens()
     streamingChars = 0
@@ -196,6 +208,8 @@ export const registerTurns: Register = on => {
         streamingChars += chunk.json.length
       } else if (chunk.kind === 'stop') {
         streamingChars = 0
+        const at = await $.clock.now()
+        await update($, cacheAtom, cache => ({ at, ttl: cache?.ttl ?? '5m' }))
         if (chunk.usage) {
           tally = {
             input: tally.input + chunk.usage.input_tokens,

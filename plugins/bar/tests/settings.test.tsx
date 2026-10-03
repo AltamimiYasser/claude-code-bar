@@ -66,6 +66,8 @@ const seed = async (put: Put, patch: Patch = {}, isWorking = false) => {
   ])
   put('turns', isWorking ? [finished, running] : [finished])
   put('demo', -1)
+  put('cache', null)
+  put('handoff', { status: 'idle', path: null, clickedAt: null, turnId: null, detail: null })
 }
 
 const BAND = {
@@ -508,5 +510,75 @@ describe('the settings file', () => {
     expect(text).toContain('// Bar settings.')
     expect(toSettings(parseJsonc(text)).context.limit).toBe(300_000)
     expect(toSettings(parseJsonc(withLimit(text, null) ?? '')).context.limit).toBeNull()
+  })
+})
+
+describe('cache', () => {
+  test('no response yet: no cache pill', async ($, on) => {
+    const put = memoryState(on)
+    mock.clock(on, { now: NOW })
+    await seed(put)
+    const ui = await $.ui.mount(BAND)
+    expect(await ui.find({ key: 'bar-cache' })).toBeUndefined()
+  })
+
+  test('the cache pill counts down from the last response, with Hand off beside it', async ($, on) => {
+    const put = memoryState(on)
+    mock.clock(on, { now: NOW })
+    await seed(put)
+    put('cache', { at: NOW - 10 * 60_000 - 15_000, ttl: '1h' })
+    const ui = await $.ui.mount(BAND)
+    expect(await ui.find({ key: 'bar-cache' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '49:45' })).toBeDefined()
+    expect((await ui.find({ key: 'handoff' }))?.props.label).toBe('Hand off')
+    expect(await ui.find({ key: 'bar-cache-detail' })).toBeDefined()
+  })
+
+  test('a 5-minute cache past its time reads expired', async ($, on) => {
+    const put = memoryState(on)
+    mock.clock(on, { now: NOW })
+    await seed(put)
+    put('cache', { at: NOW - 6 * 60_000, ttl: '5m' })
+    const ui = await $.ui.mount(BAND)
+    expect(await ui.find({ type: 'Text', text: 'expired' })).toBeDefined()
+  })
+
+  test('the button shows the handoff while it is written', async ($, on) => {
+    const put = memoryState(on)
+    mock.clock(on, { now: NOW })
+    await seed(put)
+    put('cache', { at: NOW, ttl: '1h' })
+    put('handoff', { status: 'writing', path: '/tmp/h.md', clickedAt: NOW, turnId: null, detail: null })
+    const ui = await $.ui.mount(BAND)
+    expect((await ui.find({ key: 'handoff' }))?.props.label).toBe('Writing…')
+  })
+
+  test('pressing Hand off asks for the handoff', async ($, on) => {
+    const put = memoryState(on)
+    mock.clock(on, { now: NOW })
+    await seed(put)
+    put('cache', { at: NOW, ttl: '1h' })
+    let ui = await $.ui.mount(BAND)
+    await ui.press({ key: 'handoff' })
+    // The test's state store doesn't redraw on a write: draw again.
+    await ui.unmount()
+    ui = await $.ui.mount(BAND)
+    expect((await ui.find({ key: 'handoff' }))?.props.label).toBe('Writing…')
+  })
+
+  test('cache.enabled: false hides the pill, cache.handoff: false the button', async ($, on) => {
+    const put = memoryState(on)
+    mock.clock(on, { now: NOW })
+    await seed(put, { cache: { enabled: false } })
+    put('cache', { at: NOW, ttl: '1h' })
+    let ui = await $.ui.mount(BAND)
+    expect(await ui.find({ key: 'bar-cache' })).toBeUndefined()
+    await ui.unmount()
+
+    await seed(put, { cache: { handoff: false } })
+    put('cache', { at: NOW, ttl: '1h' })
+    ui = await $.ui.mount(BAND)
+    expect(await ui.find({ key: 'bar-cache' })).toBeDefined()
+    expect(await ui.find({ key: 'handoff' })).toBeUndefined()
   })
 })

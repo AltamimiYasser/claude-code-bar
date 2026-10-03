@@ -52,6 +52,7 @@ export type BarSettings = {
   }
   answer: { frame: boolean; footer: boolean; footerTokens: boolean }
   spinnerTimer: boolean
+  cache: { enabled: boolean; handoff: boolean }
   remote: {
     enabled: boolean
     autoStart: 'never' | 'newProjects' | 'always'
@@ -59,6 +60,22 @@ export type BarSettings = {
     sessionsButton: boolean
   }
   levels: { yellow: number; orange: number; red: number }
+}
+
+// The prompt cache's lifetime, as the API reports the writes.
+export type CacheTtl = '5m' | '1h'
+
+// When the main loop's last response came and how long its cache lives.
+export type CacheState = { at: number; ttl: CacheTtl }
+
+// The Hand off button: pressed, writing the handoff (in the turn `turnId`),
+// opening the new session with it, done, or what went wrong.
+export type HandoffState = {
+  status: 'idle' | 'requested' | 'writing' | 'opening' | 'opened' | 'error'
+  path: string | null
+  clickedAt: number | null
+  turnId: string | null
+  detail: string | null
 }
 
 // Remote Control for this session's folder, as the footer shows it.
@@ -107,6 +124,9 @@ declare module 'claude-code' {
       remoteAll: RemoteInstance[]
       // The settings file as last read; absent until the first read.
       settings: BarSettings | null
+      // The prompt cache's countdown; null before the first response.
+      cache: CacheState | null
+      handoff: HandoffState
       // The sample /bar-demo shows instead of the live bar; -1 shows the live one.
       demo: number
     }

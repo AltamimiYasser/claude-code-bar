@@ -20,6 +20,7 @@ export const DEFAULTS: BarSettings = {
   },
   answer: { frame: true, footer: true, footerTokens: true },
   spinnerTimer: true,
+  cache: { enabled: true, handoff: true },
   remote: { enabled: true, autoStart: 'newProjects', notifications: true, sessionsButton: true },
   levels: { yellow: 0.5, orange: 0.75, red: 1 },
 }
@@ -72,6 +73,12 @@ export const TEMPLATE = `// Bar settings. Changes apply within a few seconds; no
     "footerTokens": true          // the token figures on the right of that footer
   },
   "spinnerTimer": true,           // live time beside the app's "working" indicator
+
+  // ── Prompt cache ──────────────────────────────────────────────────────
+  "cache": {
+    "enabled": true,              // the Cache pill: time left before the conversation drops out of the prompt cache
+    "handoff": true               // the "Hand off" button beside it: writes a handoff and continues in a new session
+  },
 
   // ── Remote Control (prompt footer) ────────────────────────────────────
   "remote": {
@@ -157,6 +164,7 @@ export const toSettings = (raw: unknown): BarSettings => {
   const turn = section('turn')
   const answer = section('answer')
   const remote = section('remote')
+  const cache = section('cache')
   const levels = section('levels')
   const d = DEFAULTS
   const limit = context.limit
@@ -193,6 +201,10 @@ export const toSettings = (raw: unknown): BarSettings => {
       footerTokens: pick(answer.footerTokens, d.answer.footerTokens),
     },
     spinnerTimer: pick(file.spinnerTimer, d.spinnerTimer),
+    cache: {
+      enabled: pick(cache.enabled, d.cache.enabled),
+      handoff: pick(cache.handoff, d.cache.handoff),
+    },
     remote: {
       enabled: pick(remote.enabled, d.remote.enabled),
       autoStart: pick(remote.autoStart, d.remote.autoStart, ['never', 'newProjects', 'always']),

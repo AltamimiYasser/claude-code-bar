@@ -76,3 +76,10 @@ export const duration = (ms: number) => {
       ? `${minutes}m ${seconds % 60}s`
       : `${seconds}s`
 }
+
+// Time left on a countdown: `59:12`, `4:05`, `0:09`.
+export const countdown = (ms: number) => {
+  const seconds = Math.max(0, Math.ceil(ms / 1000))
+
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
+}
