@@ -42,3 +42,10 @@
 - [x] Tests (52), README "how to read" section, settings comments, a visual legend page
 - [x] Live check in the desktop app (screenshot from Yasser: approved)
 - [x] Publish 1.4.0, re-enable the installed plugin, remove the dev copy
+
+# Bar 1.4.1: Context meter at the auto-compact window
+
+- [x] `context.limit` defaults to `"autoCompact"` (read from the engine's context breakdown, `rawMaxTokens`); `"model"` and a number still work; old `null` reads as `"autoCompact"`
+- [x] `/bar-limit off | model | 300k`; the model's window known before the first response
+- [x] Tests (53), README, checked live in the terminal (400k before and after a reply)
+- [x] Published 1.4.1 and installed
