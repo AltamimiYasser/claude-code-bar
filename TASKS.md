@@ -55,4 +55,4 @@
 - [x] The footer keeps what the app and other mods draw there (Mizaniah's CI button), before Sessions and Remote, instead of drawing its own mode labels in their place
 - [x] Tests (54), README, checked live in the terminal beside the Mizaniah mod (`CI ✓ Sessions 🔴 Remote`; the button opens and closes its panel, also mid-turn)
 - [ ] Live check in the desktop app
-- [ ] Published 1.4.2 and installed
+- [x] Published 1.4.2 and installed
