@@ -41,4 +41,4 @@
 - [x] Terminal fallback in glyphs; dividers never shrink (one rounded to nothing); first row keeps 4 cells for the band's `[-]` (checked in tmux, idle, working, after)
 - [x] Tests (52), README "how to read" section, settings comments, a visual legend page
 - [x] Live check in the desktop app (screenshot from Yasser: approved)
-- [ ] Publish 1.4.0, re-enable the installed plugin, remove the dev copy
+- [x] Publish 1.4.0, re-enable the installed plugin, remove the dev copy
