@@ -55,6 +55,15 @@ const memoryState = (on: On): Put => {
       return { type: 'Box', props: {}, children: [] } as never
     }
   })
+  // The footer beneath Bar: the engine's mode labels, joined by " & ", unless a
+  // test answers with a drawing of its own.
+  on('ui.render', { component: 'SessionMode' }, async (_$, e, next) => {
+    try {
+      return await next(e)
+    } catch {
+      return { type: 'Text', props: { dimColor: true }, children: [e.props.modes.join(' & ')] } as never
+    }
+  })
   // A hook standing for the engine answers an engine call as { value }.
   on('state.get', (_$, e) => ({ value: { value: values.get((e as { key: string }).key), version: 1 } }) as never)
   on('state.set', (_$, e) => {

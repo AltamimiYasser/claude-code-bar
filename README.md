@@ -53,6 +53,8 @@ A `○ Remote` toggle sits at the right of the footer under the message box. Cli
 
 Beside it, **Sessions** opens a list of every folder that has had a Remote Control, running ones first, each with its folder and how long it has run (a stopped one shows when it stopped and how long it ran). Each row offers **Stop** while running, and **Start** and **Remove** once stopped. **Stop all** ends every running one. Remote Control processes you started yourself with `claude remote-control` show up too, marked "started outside Bar", and can be stopped.
 
+Anything another mod adds to the footer (a button of its own, say) stays there, before **Sessions**.
+
 There's one Remote Control per folder, shared by every session in it. It keeps running after the session that started it ends, and any session opened in that folder later shows it and can turn it off. Its process ID and log are kept in `~/.claude/bar/remote/`.
 
 ## Install

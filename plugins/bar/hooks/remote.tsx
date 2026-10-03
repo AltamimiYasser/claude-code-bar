@@ -507,9 +507,10 @@ export const registerRemote: Register = on => {
     }
   })
 
-  // The footer's right side: the app's own mode labels, then Sessions and the
-  // Remote toggle. The slot is narrow and clips, so it holds nothing more: a
-  // failure message is in the Remote sessions panel, where there is room.
+  // The footer's right side: what the app and other mods draw there (the mode
+  // labels, another mod's button), then Sessions and the Remote toggle. The
+  // slot is narrow and clips, so Bar adds nothing more: a failure message is in
+  // the Remote sessions panel, where there is room.
   on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
     const s = await settingsOf($)
 
@@ -517,13 +518,14 @@ export const registerRemote: Register = on => {
       return next(e)
     }
 
-    const { Box, Text, Button } = $.ui.resolve(e)
+    const { Box, Button } = $.ui.resolve(e)
     const state = await read($, remote)
+    const beneath = await next(e)
     const hover = (scope: string) => (s.bar.hover ? { hover: { scope, underline: true, dimColor: false } } : {})
 
     return (
       <Box key="remote-footer" flexDirection="row" columnGap={1}>
-        {e.props.modes.length > 0 && <Text dimColor>{e.props.modes.join(' & ')}</Text>}
+        {beneath}
         {s.remote.sessionsButton && (
           <Button
             key="remote-sessions"
