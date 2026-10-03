@@ -1,6 +1,6 @@
 {
   "name": "bar",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "A status bar above the prompt (context, plan limits, the running turn's time and tokens), and a frame around each final answer",
   "author": {
     "name": "Yasser Altamimi",

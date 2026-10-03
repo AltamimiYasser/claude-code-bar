@@ -22,6 +22,8 @@ test('the footer shows the Remote Control toggle, off', async $ => {
 // translucent border colours, which the surface has to accept.
 test('the bar draws its pills', async ($, on) => {
   mock.clock(on)
+  // The engine draws nothing of its own in the band.
+  on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Box', props: {}, children: [] }) as never)
 
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({
@@ -38,6 +40,33 @@ test('the bar draws its pills', async ($, on) => {
       } as never,
     })
 
+    expect(await ui.find({ key: 'context' })).toBeDefined()
+    await ui.unmount()
+  }
+})
+
+// Another mod's card drawn in the band stays, above the bar, instead of being
+// replaced by it.
+test("another mod's card stays above the bar", async ($, on) => {
+  mock.clock(on)
+  on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Text', props: {}, children: ['Next ticket card'] }) as never)
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({
+      plugin: 'bar',
+      surface,
+      component: 'AbovePrompt',
+      props: {
+        hasSurvey: false,
+        isWorking: false,
+        maxRows: 10,
+        bodyColumns: 100,
+        scroll: { offset: 0, bodyRows: 10, totalRows: 4 },
+        view: {},
+      } as never,
+    })
+
+    expect(await ui.find({ text: 'Next ticket card' })).toBeDefined()
     expect(await ui.find({ key: 'context' })).toBeDefined()
     await ui.unmount()
   }

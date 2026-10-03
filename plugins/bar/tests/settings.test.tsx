@@ -45,6 +45,15 @@ const hoverOf = (element: unknown) => (JSON.stringify(element ?? null).includes(
 // The mod's state, kept in a map the test answers state reads and writes from.
 const memoryState = (on: On): Put => {
   const values = new Map<string, unknown>()
+  // The band beneath the bar: the engine draws nothing of its own there (an
+  // empty Box), unless a test answers with a drawing of its own.
+  on('ui.render', { component: 'AbovePrompt' }, async (_$, e, next) => {
+    try {
+      return await next(e)
+    } catch {
+      return { type: 'Box', props: {}, children: [] } as never
+    }
+  })
   // A hook standing for the engine answers an engine call as { value }.
   on('state.get', (_$, e) => ({ value: { value: values.get((e as { key: string }).key), version: 1 } }) as never)
   on('state.set', (_$, e) => {

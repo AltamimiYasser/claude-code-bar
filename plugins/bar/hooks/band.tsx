@@ -12,6 +12,14 @@ import { clockTime, colorFor, countdown, duration, longDate, resetTime, shortCou
 import { DEFAULTS, parseJsonc, SETTINGS_FILE, TEMPLATE, toSettings, withLimit } from './settings'
 import { liveSnapshot } from './turns'
 
+// Whether a tree drawn beneath this hook shows anything: the engine's own
+// answer for the band is an empty Box.
+const hasContent = (element: unknown) => {
+  const tree = element as { type?: string; children?: unknown[] } | null | undefined
+
+  return Boolean(tree) && !(tree?.type === 'Box' && (tree.children ?? []).length === 0)
+}
+
 // The smallest limit /bar-limit takes; the largest is the model's window.
 const MIN_LIMIT = 10_000
 // How often the settings file is checked for changes.
@@ -286,6 +294,8 @@ export const registerBand: Register = on => {
       return next(e)
     }
 
+    // What other mods draw here (cards, notices) stays, above the bar.
+    const below = await next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
     const level = (ratio: number) => colorFor(ratio, s.levels)
     const current = await read($, fill)
@@ -642,7 +652,15 @@ export const registerBand: Register = on => {
     }
 
     const sample = samples(now)[demoIndex(await read($, demo))]
+    const own = bar(sample ? sample.data : live)
 
-    return bar(sample ? sample.data : live)
+    return hasContent(below) ? (
+      <Box flexDirection="column" rowGap={1}>
+        {below}
+        {own}
+      </Box>
+    ) : (
+      own
+    )
   })
 }
