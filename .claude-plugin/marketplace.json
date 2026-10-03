@@ -12,7 +12,7 @@
       "name": "bar",
       "source": "./plugins/bar",
       "description": "A status bar above the prompt (context, plan limits, the running turn's time and tokens), and a frame around each final answer",
-      "version": "1.4.0"
+      "version": "1.4.1"
     }
   ]
 }

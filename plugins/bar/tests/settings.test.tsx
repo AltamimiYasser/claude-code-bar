@@ -70,6 +70,7 @@ const memoryState = (on: On): Put => {
 const seed = async (put: Put, patch: Patch = {}, isWorking = false) => {
   put('settings', settingsWith(patch))
   put('fill', { tokens: 100_000, window: 1_000_000 })
+  put('compactWindow', null)
   put('limits', [
     { kind: 'five_hour', percent: 40, resetsAt: new Date(NOW + HOUR).toISOString() },
     { kind: 'seven_day', percent: 64, resetsAt: new Date(NOW + 30 * HOUR).toISOString() },
@@ -153,11 +154,23 @@ describe('context', () => {
     expect(await ui.find({ key: 'bar-five_hour' })).toBeDefined()
   })
 
-  test('context.limit: null fills at the model window, a number at that limit', async ($, on) => {
+  test('context.limit: "autoCompact" fills at the auto-compact window, else the model window', async ($, on) => {
     const put = memoryState(on)
     mock.clock(on, { now: NOW })
     await seed(put)
     let ui = await $.ui.mount(BAND)
+    expect(await ui.find({ type: 'Text', text: /\/ 1\.0M/ })).toBeDefined()
+    await ui.unmount()
+
+    put('compactWindow', { tokens: 400_000, source: 'settings' })
+    ui = await $.ui.mount(BAND)
+    expect(await ui.find({ type: 'Text', text: /\/ 400k/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /your auto-compact window/ })).toBeDefined()
+    await ui.unmount()
+
+    await seed(put, { context: { limit: 'model' } })
+    put('compactWindow', { tokens: 400_000, source: 'settings' })
+    ui = await $.ui.mount(BAND)
     expect(await ui.find({ type: 'Text', text: /\/ 1\.0M/ })).toBeDefined()
     await ui.unmount()
 
@@ -558,7 +571,7 @@ describe('the settings file', () => {
       levels: { yellow: 'high' },
     })
     expect(settings.bar.enabled).toBe(true)
-    expect(settings.context.limit).toBeNull()
+    expect(settings.context.limit).toBe('autoCompact')
     expect(settings.context.click).toBe('usage')
     expect(settings.remote.autoStart).toBe('newProjects')
     expect(settings.levels.yellow).toBe(0.5)
@@ -575,7 +588,15 @@ describe('the settings file', () => {
     expect(text).toContain('"limit": 300000,')
     expect(text).toContain('// Bar settings.')
     expect(toSettings(parseJsonc(text)).context.limit).toBe(300_000)
-    expect(toSettings(parseJsonc(withLimit(text, null) ?? '')).context.limit).toBeNull()
+    const model = withLimit(text, 'model') ?? ''
+    expect(model).toContain('"limit": "model",')
+    expect(toSettings(parseJsonc(model)).context.limit).toBe('model')
+    expect(toSettings(parseJsonc(withLimit(model, 'autoCompact') ?? '')).context.limit).toBe('autoCompact')
+  })
+
+  test('an older file with "limit": null follows the auto-compact window', () => {
+    expect(toSettings({ context: { limit: null } }).context.limit).toBe('autoCompact')
+    expect(toSettings(parseJsonc(TEMPLATE)).context.limit).toBe('autoCompact')
   })
 })
 

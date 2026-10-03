@@ -37,11 +37,19 @@ export type ToolCallRecord = {
   ms: number | null
 }
 
+// Where the context meter is full: the auto-compact window (the model's
+// window when none is set), the model's own window, or a token count.
+export type ContextLimit = 'autoCompact' | 'model' | number
+
+// The window auto-compact measures against, and who set it (`settings` for
+// autoCompactWindow, `auto` when it is the model's own window).
+export type CompactWindow = { tokens: number; source: string }
+
 // Bar's settings, from ~/.claude/bar/settings.jsonc (hooks/settings.ts
 // documents each one).
 export type BarSettings = {
   bar: { enabled: boolean; hover: boolean; pillBorders: boolean }
-  context: { enabled: boolean; limit: number | null; click: 'usage' | 'none' }
+  context: { enabled: boolean; limit: ContextLimit; click: 'usage' | 'none' }
   planLimits: { fiveHour: boolean; weekly: boolean; resetTime: boolean; hoverDetails: boolean; pace: boolean }
   turn: {
     enabled: boolean
@@ -115,6 +123,8 @@ declare module 'claude-code' {
   interface PluginState {
     bar: {
       fill: Fill | null
+      // The auto-compact window; null until the first reading.
+      compactWindow: CompactWindow | null
       limits: Limit[]
       turns: Turn[]
       // The tool calls of the running turn, or of the last one.

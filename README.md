@@ -10,7 +10,7 @@ One panel with two rows. Row 1 is capacity: how full things are. Row 2 is right 
 
 *Row 1: capacity*
 
-- **Context** `━━━━●───┊──┊──  216k / 1.0M  22%`: how full this chat's context window is. The bold number is the tokens in the conversation, `/ 1.0M` is the limit (the model's window, or your own from `/bar-limit`), then the share. The faint ticks on the track mark where the next colours start; only the ones still ahead are drawn. Click **Context** to run `/usage`.
+- **Context** `━━━━●───┊──┊──  216k / 1.0M  22%`: how full this chat's context window is. The bold number is the tokens in the conversation, `/ 400k` is the limit (your auto-compact window when you've set one, else the model's window, or your own from `/bar-limit`), then the share. The faint ticks on the track mark where the next colours start; only the ones still ahead are drawn. Click **Context** to run `/usage`.
 - **5h** and **Week** `━━●─┃──  30%  07:20`: your plan's 5-hour window and weekly limit. The bold percentage is how much you've used; the dim time or day is when it resets. The upright mark on the line is **now**: how much of the window has passed. Bead left of the mark: you're using it slower than the clock, fine. Bead right of the mark: you're ahead of pace and may run out before it resets. Hover for the exact reset date and where you'll land at this pace.
 
 *Row 2: right now*
@@ -79,7 +79,7 @@ Start a new session afterwards.
 
 | Command | What it does |
 | --- | --- |
-| `/bar-limit 300k` | Sets where the context meter is full and turns red. It accepts `300k`, `1.5m` or `250000`, and is capped at the model's own window. `/bar-limit off` goes back to the model's window; `/bar-limit` on its own shows the current value. |
+| `/bar-limit 300k` | Sets where the context meter is full and turns red. It accepts `300k`, `1.5m` or `250000`, and is capped at the model's own window. `/bar-limit model` uses the model's whole window; `/bar-limit off` goes back to the default, your auto-compact window; `/bar-limit` on its own shows the current value. |
 | `/remote` | Turns Remote Control on or off for this folder, like the footer toggle. `/remote list` opens Remote sessions; `/remote stop-all` stops every running one. |
 | `/bar-handoff` | Writes a handoff and continues in a new session, like the Hand off button. |
 | `/bar-demo` | Steps through sample bars (no plan limits, light use, getting full, past the limit), then back to your live bar. |
@@ -94,7 +94,7 @@ Everything Bar shows can be turned off, in `~/.claude/bar/settings.jsonc`. Bar w
 | `bar.hover` | `true` | Every hover effect: the details, the underlines |
 | `bar.pillBorders` | `true` | The faint outline around the bar's panel (desktop) |
 | `context.enabled` | `true` | The Context meter |
-| `context.limit` | `null` | Where the meter is full: `null` for the model's window, or a token count |
+| `context.limit` | `"autoCompact"` | Where the meter is full: `"autoCompact"` for your auto-compact window (`autoCompactWindow` in Claude Code's settings; the model's window when none is set), `"model"` for the model's own window, or a token count. An older file's `null` reads as `"autoCompact"` |
 | `context.click` | `"usage"` | Clicking "Context": `"usage"` runs `/usage`, `"none"` does nothing |
 | `planLimits.fiveHour` / `weekly` | `true` | The 5h and Week meters |
 | `planLimits.resetTime` | `true` | The reset time after each percentage |

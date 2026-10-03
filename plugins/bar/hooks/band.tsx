@@ -7,7 +7,7 @@ import type {
   SessionRateLimit,
 } from 'claude-code'
 
-import type { BarData, Fill, Limit, BarSettings, Tokens, Turn } from '../types'
+import type { BarData, BarSettings, CompactWindow, ContextLimit, Fill, Limit, Tokens, Turn } from '../types'
 import { cacheExpiry } from './cache'
 import { clockTime, colorFor, countdown, duration, longDate, resetTime, shortCount, until } from './format'
 import { hruleSvg, meterSvg, pulseSvg, restingSvg, ruleSvg, sparkSvg } from './meter'
@@ -26,6 +26,9 @@ const hasContent = (element: unknown) => {
 const MIN_LIMIT = 10_000
 // How often the settings file is checked for changes.
 const SETTINGS_POLL_MS = 3_000
+// How often the auto-compact window is read again between responses, so an
+// edit to Claude Code's settings shows while idle.
+const COMPACT_POLL_MS = 60_000
 // In the terminal the context meter is two runs of the line glyph sharing
 // whatever room the pill has left, in proportion: this many steps, each run
 // long enough to fill the widest band, and cut at its box's edge.
@@ -51,6 +54,7 @@ const WINDOW_NAMES: Record<string, string> = {
 }
 
 const fill = atom({ plugin: 'bar', key: 'fill' } as const, null)
+const compactAtom = atom({ plugin: 'bar', key: 'compactWindow' } as const, null)
 const limits = atom({ plugin: 'bar', key: 'limits' } as const, [])
 // The turns (written by the turn hooks): the bar shows the running turn's
 // time and tokens while Claude works.
@@ -144,10 +148,51 @@ const parseCount = (text: string) => {
   return Number.isFinite(value) && value > 0 ? value : null
 }
 
-const toFill = (context: SessionContextUsage): Fill | null =>
-  context.tokens === undefined
-    ? null
-    : { tokens: context.tokens, window: context.window }
+// Before the first response there are no tokens yet, but the window is known.
+const toFill = (context: SessionContextUsage): Fill => ({ tokens: context.tokens ?? 0, window: context.window })
+
+// The window auto-compact measures against, from the context breakdown
+// (estimated locally; no request is sent). Null where the session has none.
+async function readCompactWindow($: EngineInterface): Promise<CompactWindow | null> {
+  try {
+    const { breakdown } = (await $.session.usage({ breakdown: 'summary' })).context
+
+    return breakdown && breakdown.rawMaxTokens > 0
+      ? { tokens: breakdown.rawMaxTokens, source: breakdown.autocompactSource }
+      : null
+  } catch {
+    return null
+  }
+}
+
+const refreshCompactWindow = async ($: EngineInterface) => {
+  const next = await readCompactWindow($)
+  if (next) {
+    await update($, compactAtom, previous =>
+      previous?.tokens === next.tokens && previous.source === next.source ? previous : next,
+    )
+  }
+}
+
+// The token count where the context meter is full: the auto-compact window
+// (else the model's), the model's own window, or the person's number. Never
+// past the model's window.
+export const contextLimit = (setting: ContextLimit, window: number | null, compact: CompactWindow | null) => {
+  const model = window ?? compact?.tokens ?? 200_000
+  const wanted = setting === 'model' ? model : setting === 'autoCompact' ? (compact?.tokens ?? model) : setting
+
+  return Math.min(wanted, model)
+}
+
+// What the limit is, in words, for the hover detail and /bar-limit.
+const limitWords = (setting: ContextLimit, compact: CompactWindow | null) =>
+  setting === 'model'
+    ? "the model's full window"
+    : setting === 'autoCompact'
+      ? compact && compact.source !== 'auto'
+        ? 'your auto-compact window'
+        : "the model's full window (no auto-compact window set)"
+      : 'your limit, set with /bar-limit'
 
 const toLimits = (windows: SessionRateLimit[]): Limit[] =>
   windows
@@ -206,7 +251,7 @@ export const registerBand: Register = on => {
     await $.ui.close({ id: 'bar-agents' })
     await $.command.register({
       name: 'bar-limit',
-      description: "Set where the context meter turns red, e.g. /bar-limit 300k (off: the model's window)",
+      description: 'Set where the context meter turns red: /bar-limit 300k, model, or off (your auto-compact window)',
     })
     await $.command.register({
       name: 'bar-demo',
@@ -219,6 +264,8 @@ export const registerBand: Register = on => {
     const usage = await $.session.usage()
     await update($, fill, () => toFill(usage.context))
     await update($, limits, () => toLimits(usage.rateLimits))
+    await refreshCompactWindow($)
+    $.clock.every(COMPACT_POLL_MS, () => void refreshCompactWindow($))
 
     return next(e)
   })
@@ -226,27 +273,34 @@ export const registerBand: Register = on => {
   on('command.run', { command: 'bar-limit' }, async ($, e) => {
     const settings = (await read($, settingsAtom)) ?? DEFAULTS
     const window = (await read($, fill))?.window ?? null
+    await refreshCompactWindow($)
+    const compact = await read($, compactAtom)
     const word = e.args.trim().toLowerCase()
-    const current = settings.context.limit
+    const describe = (setting: ContextLimit) =>
+      `${shortCount(contextLimit(setting, window, compact))} tokens, ${limitWords(setting, compact)}`
 
     if (!word) {
       return {
-        text:
-          current === null
-            ? `The context meter fills at the model's window${window ? ` (${shortCount(window)})` : ''}. Change it with /bar-limit 300k.`
-            : `The context meter fills at ${shortCount(current)} tokens. /bar-limit off goes back to the model's window.`,
+        text: `The context meter fills at ${describe(settings.context.limit)}. Change it with /bar-limit 300k, /bar-limit model, or /bar-limit off for your auto-compact window.`,
       }
     }
 
-    // "off" (or "default", "model", "none") goes back to the model's window.
-    const isOff = ['off', 'default', 'model', 'none'].includes(word)
-    const wanted = isOff ? null : parseCount(word)
+    // "off" (or "default", "compact", "auto", "none") follows the auto-compact window.
+    const isAuto = ['off', 'default', 'compact', 'autocompact', 'auto', 'none'].includes(word)
+    const isModel = ['model', 'window', 'full'].includes(word)
+    const wanted = isAuto || isModel ? null : parseCount(word)
 
-    if (!isOff && wanted === null) {
-      return { text: 'Give a token count such as 300k, 1.5m or 250000, or "off" for the model\'s window.' }
+    if (!isAuto && !isModel && wanted === null) {
+      return {
+        text: 'Give a token count such as 300k, 1.5m or 250000, "model" for the model\'s window, or "off" for your auto-compact window.',
+      }
     }
 
-    const limit = wanted === null ? null : Math.max(MIN_LIMIT, window ? Math.min(wanted, window) : wanted)
+    const limit: ContextLimit = isAuto
+      ? 'autoCompact'
+      : isModel
+        ? 'model'
+        : Math.max(MIN_LIMIT, window ? Math.min(wanted ?? 0, window) : (wanted ?? 0))
     const text = settingsPath && (await $.fs.exists(settingsPath)) ? await $.fs.read(settingsPath) : TEMPLATE
     const updated = withLimit(text, limit)
 
@@ -258,10 +312,7 @@ export const registerBand: Register = on => {
     await loadSettings($)
 
     return {
-      text:
-        limit === null
-          ? "The context meter now fills at the model's window."
-          : `The context meter now fills at ${shortCount(limit)} tokens${wanted !== null && limit < wanted ? ` (capped at the model's ${shortCount(limit)} window)` : ''}.`,
+      text: `The context meter now fills at ${describe(limit)}${typeof limit === 'number' && wanted !== null && limit < wanted ? ` (capped at the model's window)` : ''}.`,
     }
   })
 
@@ -282,7 +333,12 @@ export const registerBand: Register = on => {
 
   on('session.measure', async ($, e, next) => {
     if (e.changed.includes('context')) {
+      const before = (await read($, fill))?.window
       await update($, fill, () => toFill(e.context))
+      // A model switch moves the auto-compact window too.
+      if (before !== e.context.window) {
+        await refreshCompactWindow($)
+      }
     }
     if (e.changed.includes('rateLimits')) {
       await update($, limits, () => toLimits(e.rateLimits))
@@ -314,13 +370,13 @@ export const registerBand: Register = on => {
     const elapsed = running ? now - running.startedAt : 0
     const liveTurn = running ? liveSnapshot() : null
     const window = current?.window ?? null
+    const compact = await read($, compactAtom)
     const cache = s.cache.enabled ? await read($, cacheAtom) : null
     const handoff = await read($, handoffAtom)
 
     const live: BarData = {
       tokens: current?.tokens ?? 0,
-      // The model's window unless the person set a limit, never past it.
-      limit: s.context.limit === null ? (window ?? 200_000) : Math.min(s.context.limit, window ?? s.context.limit),
+      limit: contextLimit(s.context.limit, window, compact),
       limits: await read($, limits),
     }
 
@@ -543,7 +599,7 @@ export const registerBand: Register = on => {
           </Text>
           <Text dimColor>
             {'  ·  '}
-            {s.context.limit === null ? "the model's full window" : 'your limit, set with /bar-limit'}
+            {limitWords(s.context.limit, compact)}
             {s.context.click === 'usage' ? '  ·  click Context for /usage' : ''}
           </Text>
         </Text>,

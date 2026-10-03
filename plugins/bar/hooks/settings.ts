@@ -1,4 +1,4 @@
-import type { BarSettings } from '../types'
+import type { BarSettings, ContextLimit } from '../types'
 
 // The settings file, `~/.claude/bar/settings.jsonc`: what each option is,
 // its default, and how a file's text becomes BarSettings. Plain functions with
@@ -8,7 +8,7 @@ export const SETTINGS_FILE = '.claude/bar/settings.jsonc'
 
 export const DEFAULTS: BarSettings = {
   bar: { enabled: true, hover: true, pillBorders: true },
-  context: { enabled: true, limit: null, click: 'usage' },
+  context: { enabled: true, limit: 'autoCompact', click: 'usage' },
   planLimits: { fiveHour: true, weekly: true, resetTime: true, hoverDetails: true, pace: true },
   turn: {
     enabled: true,
@@ -41,9 +41,12 @@ export const TEMPLATE = `// Bar settings. Changes apply within a few seconds; no
   // ── Context (row 1) ───────────────────────────────────────────────────
   "context": {
     "enabled": true,
-    "limit": null,                // tokens where the meter is full and red. null = the model's own context window.
-                                  // A number (e.g. 400000) sets your own limit, capped at the model's window.
-                                  // /bar-limit 300k writes this value; /bar-limit off sets it back to null.
+    "limit": "autoCompact",       // where the meter is full and red:
+                                  // "autoCompact": your auto-compact window (autoCompactWindow in Claude Code's
+                                  //   settings), or the model's window when none is set
+                                  // "model": the model's own context window
+                                  // a number (e.g. 300000): your own limit, capped at the model's window
+                                  // /bar-limit 300k, /bar-limit model and /bar-limit off (autoCompact) write it.
     "click": "usage"              // what clicking "Context" does: "usage" (runs /usage) or "none"
   },
 
@@ -177,7 +180,7 @@ export const toSettings = (raw: unknown): BarSettings => {
     },
     context: {
       enabled: pick(context.enabled, d.context.enabled),
-      limit: typeof limit === 'number' && limit > 0 ? Math.round(limit) : null,
+      limit: typeof limit === 'number' && limit > 0 ? Math.round(limit) : limit === 'model' ? 'model' : 'autoCompact',
       click: pick(context.click, d.context.click, ['usage', 'none']),
     },
     planLimits: {
@@ -221,9 +224,9 @@ export const toSettings = (raw: unknown): BarSettings => {
 
 // The file's text with `context.limit` set to a new value, its comments and
 // layout kept: what /bar-limit writes.
-export const withLimit = (text: string, limit: number | null) => {
-  const value = limit === null ? 'null' : String(limit)
-  const pattern = /("limit"\s*:\s*)(null|\d+(?:\.\d+)?)/
+export const withLimit = (text: string, limit: ContextLimit) => {
+  const value = typeof limit === 'number' ? String(limit) : `"${limit}"`
+  const pattern = /("limit"\s*:\s*)(null|\d+(?:\.\d+)?|"[^"\n]*")/
 
   return pattern.test(text) ? text.replace(pattern, `$1${value}`) : null
 }
