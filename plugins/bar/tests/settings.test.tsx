@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 
 import type { BarSettings, Turn } from '../types'
 import { DEFAULTS, parseJsonc, TEMPLATE, toSettings, withLimit } from '../hooks/settings'
+import { meterSvg, sparkSvg } from '../hooks/meter'
 
 // Each option of ~/.claude/bar/settings.jsonc, one at a time: the test puts
 // the settings (and the figures the bar draws from) into the mod's state,
@@ -128,17 +129,17 @@ describe('bar', () => {
     expect(await ui.find({ key: 'bar-five_hour-detail' })).toBeUndefined()
   })
 
-  test('bar.pillBorders: false draws the pills without an outline', async ($, on) => {
+  test('bar.pillBorders: false draws the panel without an outline', async ($, on) => {
     const put = memoryState(on)
     mock.clock(on, { now: NOW })
     await seed(put)
     let ui = await $.ui.mount(BAND)
-    expect((await ui.find({ key: 'bar-context' }))?.props.borderStyle).toBe('round')
+    expect((await ui.find({ key: 'bar-panel' }))?.props.borderStyle).toBe('round')
     await ui.unmount()
 
     await seed(put, { bar: { pillBorders: false } })
     ui = await $.ui.mount(BAND)
-    expect((await ui.find({ key: 'bar-context' }))?.props.borderStyle).toBeUndefined()
+    expect((await ui.find({ key: 'bar-panel' }))?.props.borderStyle).toBeUndefined()
   })
 })
 
@@ -171,6 +172,61 @@ describe('context', () => {
     await seed(put, { context: { limit: 5_000_000 } })
     const ui = await $.ui.mount(BAND)
     expect(await ui.find({ type: 'Text', text: /\/ 1\.0M/ })).toBeDefined()
+  })
+
+  test('the pill shows the count and its percentage, which never shrink', async ($, on) => {
+    const put = memoryState(on)
+    mock.clock(on, { now: NOW })
+    await seed(put, { context: { limit: 400_000 } })
+    put('fill', { tokens: 286_000, window: 1_000_000 })
+    for (const surface of ['terminal', 'desktop'] as const) {
+      const ui = await $.ui.mount({ ...BAND, surface })
+      expect((await ui.find({ key: 'context-figures' }))?.props.flexShrink).toBe(0)
+      expect(await ui.find({ type: 'Text', text: '286k / 400k  72%' })).toBeDefined()
+      await ui.unmount()
+    }
+  })
+
+  test('the app draws the meter as one stretching SVG line', async ($, on) => {
+    const put = memoryState(on)
+    mock.clock(on, { now: NOW })
+    await seed(put, { context: { limit: 400_000 } })
+    put('fill', { tokens: 286_000, window: 1_000_000 })
+    const ui = await $.ui.mount(BAND)
+    const svg = await ui.find({ type: 'Svg' })
+    expect(svg?.props.alt).toBe('72% of the context used')
+    // The fill and the bead stop at 71.5%, in the orange of that level.
+    expect(String(svg?.props.source)).toContain('* 0.715)')
+    expect(String(svg?.props.source)).toContain('rgb(202, 138, 4)')
+    // Only the ticks still ahead show: orange (75%), not yellow (50%).
+    expect(String(svg?.props.source).match(/<rect style="x:calc\(calc/g)?.length).toBe(1)
+    expect(await ui.find({ key: 'context-used' })).toBeUndefined()
+  })
+
+  test('the terminal splits the meter by the same share', async ($, on) => {
+    const put = memoryState(on)
+    mock.clock(on, { now: NOW })
+    await seed(put, { context: { limit: 400_000 } })
+    put('fill', { tokens: 286_000, window: 1_000_000 })
+    const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+    // 715 of 1000 steps used.
+    expect((await ui.find({ key: 'context-used' }))?.props.flexGrow).toBe(715)
+    expect((await ui.find({ key: 'context-rest' }))?.props.flexGrow).toBe(285)
+    expect(await ui.find({ type: 'Svg' })).toBeUndefined()
+  })
+
+  test('past the limit the meter is full and the percentage goes over 100', async ($, on) => {
+    const put = memoryState(on)
+    mock.clock(on, { now: NOW })
+    await seed(put, { context: { limit: 400_000 } })
+    put('fill', { tokens: 431_000, window: 1_000_000 })
+    let ui = await $.ui.mount(BAND)
+    expect(await ui.find({ type: 'Text', text: '431k / 400k  108%' })).toBeDefined()
+    expect(String((await ui.find({ type: 'Svg' }))?.props.source)).toContain('* 1)')
+    await ui.unmount()
+
+    ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+    expect(await ui.find({ key: 'context-rest' })).toBeUndefined()
   })
 
   test('context.click: "none" makes the label plain text', async ($, on) => {
@@ -209,12 +265,13 @@ describe('planLimits', () => {
     mock.clock(on, { now: NOW })
     await seed(put)
     let ui = await $.ui.mount(BAND)
-    expect(await ui.find({ type: 'Text', text: /^ · / })).toBeDefined()
+    // The 5-hour window resets within the day: a clock time.
+    expect(await ui.find({ type: 'Text', text: /^\d\d:\d\d$/ })).toBeDefined()
     await ui.unmount()
 
     await seed(put, { planLimits: { resetTime: false } })
     ui = await $.ui.mount(BAND)
-    expect(await ui.find({ type: 'Text', text: /^ · / })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /^\d\d:\d\d$/ })).toBeUndefined()
   })
 
   test('planLimits.hoverDetails: false drops the hover rows', async ($, on) => {
@@ -310,7 +367,7 @@ describe('turn', () => {
     await seed(put, { turn: { toolCallsPanel: false } })
     ui = await $.ui.mount(BAND)
     expect(await ui.find({ key: 'tools' })).toBeUndefined()
-    expect(await ui.find({ type: 'Text', text: /tool calls$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^9 tools$/ })).toBeDefined()
   })
 })
 
@@ -320,12 +377,12 @@ describe('levels', () => {
     mock.clock(on, { now: NOW })
     await seed(put)
     let ui = await $.ui.mount(BAND)
-    expect((await ui.find({ type: 'Text', text: /^ +100k$/ }))?.props.color).toBe('success')
+    expect((await ui.find({ type: 'Text', text: /^100k$/ }))?.props.color).toBe('success')
     await ui.unmount()
 
     await seed(put, { levels: { yellow: 0.05, orange: 0.08, red: 0.5 } })
     ui = await $.ui.mount(BAND)
-    expect((await ui.find({ type: 'Text', text: /^ +100k$/ }))?.props.color).toBe('claude')
+    expect((await ui.find({ type: 'Text', text: /^100k$/ }))?.props.color).toBe('claude')
   })
 })
 
@@ -539,7 +596,7 @@ describe('cache', () => {
     const ui = await $.ui.mount(BAND)
     expect(await ui.find({ key: 'bar-cache' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: '49:45' })).toBeDefined()
-    expect((await ui.find({ key: 'handoff' }))?.props.label).toBe('Hand off')
+    expect((await ui.find({ key: 'handoff' }))?.props.label).toBe('Hand off →')
     expect(await ui.find({ key: 'bar-cache-detail' })).toBeDefined()
   })
 
@@ -589,5 +646,103 @@ describe('cache', () => {
     ui = await $.ui.mount(BAND)
     expect(await ui.find({ key: 'bar-cache' })).toBeDefined()
     expect(await ui.find({ key: 'handoff' })).toBeUndefined()
+  })
+})
+
+describe('the panel', () => {
+  test('row 1 holds capacity, row 2 the turn, the cache and Hand off', async ($, on) => {
+    const put = memoryState(on)
+    mock.clock(on, { now: NOW })
+    await seed(put)
+    put('cache', { at: NOW - 10 * 60_000, ttl: '1h' })
+    for (const surface of ['terminal', 'desktop'] as const) {
+      const ui = await $.ui.mount({ ...BAND, surface })
+      const capacity = JSON.stringify(await ui.find({ key: 'row-capacity' }))
+      const current = JSON.stringify(await ui.find({ key: 'row-now' }))
+      for (const key of ['bar-context', 'bar-five_hour', 'bar-seven_day']) {
+        expect(capacity).toContain(`"${key}"`)
+      }
+      for (const key of ['turn', 'tools-slot', 'bar-cache', 'handoff']) {
+        expect(current).toContain(`"${key}"`)
+      }
+      await ui.unmount()
+    }
+  })
+
+  test('the 5h meter marks how much of the window has passed', async ($, on) => {
+    const put = memoryState(on)
+    mock.clock(on, { now: NOW })
+    await seed(put)
+    let ui = await $.ui.mount(BAND)
+    // Resets in an hour: 4 of its 5 hours have passed.
+    expect(await ui.find({ type: 'Svg', props: { alt: '40% used, 80% of the window passed' } })).toBeDefined()
+    await ui.unmount()
+
+    await seed(put, { planLimits: { pace: false } })
+    ui = await $.ui.mount(BAND)
+    expect(await ui.find({ type: 'Svg', props: { alt: '40% used' } })).toBeDefined()
+    await ui.unmount()
+
+    // The terminal draws the mark as a tall bar in the line.
+    await seed(put)
+    ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+    expect(await ui.find({ type: 'Text', text: /┃/ })).toBeDefined()
+  })
+
+  test('a running turn beats, a finished one rests', async ($, on) => {
+    const put = memoryState(on)
+    mock.clock(on, { now: NOW })
+    await seed(put, {}, true)
+    let ui = await $.ui.mount(BAND)
+    expect(await ui.find({ type: 'Svg', props: { alt: 'Working' } })).toBeDefined()
+    await ui.unmount()
+
+    await seed(put)
+    ui = await $.ui.mount(BAND)
+    expect(await ui.find({ type: 'Svg', props: { alt: 'Idle' } })).toBeDefined()
+  })
+
+  test('Hand off becomes the main action as the cache runs out', async ($, on) => {
+    const put = memoryState(on)
+    mock.clock(on, { now: NOW })
+    await seed(put)
+    put('cache', { at: NOW - 10 * 60_000, ttl: '1h' })
+    let ui = await $.ui.mount(BAND)
+    expect((await ui.find({ key: 'handoff' }))?.props.variant).toBe('secondary')
+    await ui.unmount()
+
+    // 50 of its 60 minutes gone: past the orange level.
+    put('cache', { at: NOW - 50 * 60_000, ttl: '1h' })
+    ui = await $.ui.mount(BAND)
+    expect((await ui.find({ key: 'handoff' }))?.props.variant).toBe('primary')
+  })
+
+  test('hovering an item lays its detail over the other row', async ($, on) => {
+    const put = memoryState(on)
+    mock.clock(on, { now: NOW })
+    await seed(put)
+    put('cache', { at: NOW, ttl: '1h' })
+    const ui = await $.ui.mount(BAND)
+    const capacity = JSON.stringify(await ui.find({ key: 'row-capacity' }))
+    const current = JSON.stringify(await ui.find({ key: 'row-now' }))
+    expect(capacity).toContain('"bar-cache-detail"')
+    expect(capacity).toContain('"bar-turn-detail"')
+    expect(current).toContain('"bar-context-detail"')
+    expect(current).toContain('"bar-five_hour-detail"')
+  })
+})
+
+describe('the drawings', () => {
+  test('the sparkline needs two samples and ends in the bead', () => {
+    expect(sparkSvg([], 'claude')).toBeNull()
+    expect(sparkSvg([4], 'claude')).toBeNull()
+    const svg = sparkSvg([0, 4, 9, 3], 'claude') ?? ''
+    expect(svg).toContain('<path')
+    expect(svg).toContain('rgb(217, 119, 87)')
+  })
+
+  test('the meter draws its "now" mark only when given one', () => {
+    expect(meterSvg(0.3, 'success', { cursor: 0.5 })).toContain('height:10px')
+    expect(meterSvg(0.3, 'success', {})).not.toContain('height:10px')
   })
 })

@@ -6,15 +6,40 @@ A Claude Code mod that adds a status bar above the prompt, a live timer on every
 
 **The bar, above the prompt**
 
-- **Context:** a meter and the tokens used against the model's context window (or a limit you set), going green → yellow → orange → red. Each pill's border is a faint version of its meter's color. Click **Context** to run `/usage`.
-- **Plan limits:** your 5-hour and weekly usage with their reset times. Hover either one for the exact reset date and whether you're on pace to run out before it resets.
-- **Cache:** how long the conversation stays in the prompt cache, counted down from Claude's last response (1 hour or 5 minutes, whichever the session uses). Once it expires, the next message has to write the whole conversation to the cache again. Hover it for the exact expiry time and how many tokens that would be.
-- **Hand off:** a button inside the Cache pill (or `/bar-handoff`). It runs `/mattpocock-skills:handoff` to write a handoff document, then opens a new Code session in the same folder that continues from it. The current chat stays exactly as it is: it is never cleared or compacted. The desktop app asks you to trust the folder for the new session. When that session runs Bar, it sends the continue prompt by itself; otherwise the prompt is waiting in its message box. Requires the [mattpocock-skills](https://github.com/mattpocock/skills) plugin.
+One panel with two rows. Row 1 is capacity: how full things are. Row 2 is right now: the turn, its tools, the prompt cache and Hand off. Every gauge is the same drawing: a thin track, a fill that brightens toward its end, and a bead (a dot with a white centre) marking where you are. Hover any item and its full detail appears laid over the other row.
+
+*Row 1: capacity*
+
+- **Context** `━━━━●───┊──┊──  216k / 1.0M  22%`: how full this chat's context window is. The bold number is the tokens in the conversation, `/ 1.0M` is the limit (the model's window, or your own from `/bar-limit`), then the share. The faint ticks on the track mark where the next colours start; only the ones still ahead are drawn. Click **Context** to run `/usage`.
+- **5h** and **Week** `━━●─┃──  30%  07:20`: your plan's 5-hour window and weekly limit. The bold percentage is how much you've used; the dim time or day is when it resets. The upright mark on the line is **now**: how much of the window has passed. Bead left of the mark: you're using it slower than the clock, fine. Bead right of the mark: you're ahead of pace and may run out before it resets. Hover for the exact reset date and where you'll land at this pace.
+
+*Row 2: right now*
+
+- **The beat:** an orange bead with a ring swelling once a second means Claude is working; the beat keeps time with the timer. A hollow grey ring means idle, and the row shows the last turn.
+- **Working 1m 04s** (orange) or **Last turn 16s**: how long the turn has run, or took.
+- **The sparkline** (while working): output tokens per second over the last 24 seconds, the bead being now. High means Claude is writing fast; flat means it's thinking, or waiting on a tool.
+- **The figures:** `out` is the tokens Claude wrote (a `+` means more are still streaming in), `read` the tokens served from the prompt cache, `write` the tokens newly written to it. Hover the turn for all four, with `in` (input outside the cache) and the tool calls.
+- **3 tools ›**: how many tools Claude called this turn. Click it for a panel listing every call, each opening to its input and output.
+- **Cache 59:27**: how long the conversation stays in the prompt cache, counted down from Claude's last response (1 hour or 5 minutes, whichever the session uses). Once it expires, the next message has to write the whole conversation to the cache again. Hover for the exact expiry time and how many tokens that would be.
+- **Hand off →** (or `/bar-handoff`): runs `/mattpocock-skills:handoff` to write a handoff document, then opens a new Code session in the same folder that continues from it. The current chat stays exactly as it is: it is never cleared or compacted. The button is outlined most of the time and turns solid once the cache is running out (orange or red), the moment it's worth pressing. While it works it reads Writing…, Opening…, then Opened ✓ (or Failed, with the reason on hover). The desktop app asks you to trust the folder for the new session. When that session runs Bar, it sends the continue prompt by itself; otherwise the prompt is waiting in its message box. Requires the [mattpocock-skills](https://github.com/mattpocock/skills) plugin.
+
+*The colours*
+
+| Colour | On a meter or a countdown |
+| --- | --- |
+| Green | under half used |
+| Yellow | from half (`levels.yellow`, 50%) |
+| Orange | from three quarters (`levels.orange`, 75%) |
+| Red | at or past the limit (`levels.red`, 100%); the cache has expired |
+
+Orange in the turn (the beat, the timer, the sparkline) is Claude's own colour: it only means Claude is working. A bold number is the value to read; dim text is a label or a unit.
+
+In the terminal the same panel is drawn in characters: `━` used, `─` the track, `┃` the now mark, `●` working, `○` idle, `│` between items, and Hand off as `[ Hand off → ]`.
+
 The app already shows the repo, branch, uncommitted changes and running tasks above the prompt, so Bar leaves those out.
 
 **Every turn**
 
-- While Claude works, the bar shows how long the turn has been running and the tokens it has used so far (input, output, cache read, cache write). It updates every second and stays in view as the reply scrolls. Between turns it shows the last turn's time and tokens. On the right: how many tools Claude called in that turn. Click it for a panel listing every call, each opening to its input and output.
 - The final answer in an orange frame. Under the frame: how long the turn took, plus its input, output, cache-read and cache-write tokens.
 
 **Remote Control, in the prompt footer**
@@ -66,23 +91,23 @@ Everything Bar shows can be turned off, in `~/.claude/bar/settings.jsonc`. Bar w
 | Option | Default | What it controls |
 | --- | --- | --- |
 | `bar.enabled` | `true` | The whole bar above the prompt |
-| `bar.hover` | `true` | Every hover effect: details, underlines, blue borders |
-| `bar.pillBorders` | `true` | The light colored outline around each pill |
-| `context.enabled` | `true` | The context pill |
+| `bar.hover` | `true` | Every hover effect: the details, the underlines |
+| `bar.pillBorders` | `true` | The faint outline around the bar's panel (desktop) |
+| `context.enabled` | `true` | The Context meter |
 | `context.limit` | `null` | Where the meter is full: `null` for the model's window, or a token count |
 | `context.click` | `"usage"` | Clicking "Context": `"usage"` runs `/usage`, `"none"` does nothing |
-| `planLimits.fiveHour` / `weekly` | `true` | The 5h and Week pills |
+| `planLimits.fiveHour` / `weekly` | `true` | The 5h and Week meters |
 | `planLimits.resetTime` | `true` | The reset time after each percentage |
-| `planLimits.hoverDetails` | `true` | The exact reset date while hovering a pill |
-| `planLimits.pace` | `true` | The pace estimate in those details |
-| `turn.enabled` | `true` | Line 2, the turn |
-| `turn.whileWorking` / `lastTurn` | `true` | The live turn, and the last turn between turns |
-| `turn.tokens` | `true` | The token figures on line 2 |
+| `planLimits.hoverDetails` | `true` | The exact reset date while hovering 5h or Week |
+| `planLimits.pace` | `true` | The "now" mark on the 5h and Week meters, and the pace estimate in their details |
+| `turn.enabled` | `true` | The turn on row 2 (the cache and Hand off stay) |
+| `turn.whileWorking` / `lastTurn` | `true` | The live turn (beat, time, sparkline), and the last turn between turns |
+| `turn.tokens` | `true` | The token figures on row 2 |
 | `turn.toolCalls` / `toolCallsPanel` | `true` | The tool-call count, and the panel it opens |
 | `answer.frame` / `footer` / `footerTokens` | `true` | The answer frame, the line under it, and its token figures |
 | `spinnerTimer` | `true` | The live time beside the app's working indicator |
-| `cache.enabled` | `true` | The Cache pill |
-| `cache.handoff` | `true` | The Hand off button in it (`/bar-handoff` works either way) |
+| `cache.enabled` | `true` | The Cache countdown |
+| `cache.handoff` | `true` | The Hand off button beside it (`/bar-handoff` works either way) |
 | `remote.enabled` | `true` | The Remote Control toggle and `/remote` |
 | `remote.autoStart` | `"newProjects"` | Start Remote Control by itself: `"never"`, `"newProjects"` (a project's first session) or `"always"` |
 | `remote.notifications` | `true` | The on/off notices |

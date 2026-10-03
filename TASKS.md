@@ -27,3 +27,18 @@
 - [x] Checked the process against mattpocock's handoff docs: only the old session runs the skill; the new one just reads the file
 - [x] README: Cache, Hand off, /bar-handoff, cache.* settings
 - [x] Publish 1.3.0, re-enable the installed plugin, remove the dev copies
+
+# Bar 1.4.0: the instrument panel
+
+- [x] Context pill shows the count and the percentage in a slot that never shrinks; the meter fills the room left and gives it up first
+- [x] Desktop meters drawn as stretching SVG (hooks/meter.ts): hairline track, ticks ahead at the colour levels, a fill brightening to a glowing bead; follows the app's light/dark text colour
+- [x] Three restyle directions mocked with only what the desktop draws; Yasser chose A (instrument panel)
+- [x] One panel, two rows: capacity (Context, 5h, Week) and right now (turn, tools, Cache, Hand off), hairline dividers
+- [x] 5h/Week meters with a "now" mark (how much of the window has passed)
+- [x] Working beat (SVG pulse, once a second), resting ring between turns, output-rate sparkline (samples each second in turns.tsx)
+- [x] Hand off is the app's real button, solid (primary) once the cache is orange/red/expired
+- [x] Hover details on the other row: Context, 5h, Week over row 2; the turn and the cache over row 1, so Hand off is never covered
+- [x] Terminal fallback in glyphs; dividers never shrink (one rounded to nothing); first row keeps 4 cells for the band's `[-]` (checked in tmux, idle, working, after)
+- [x] Tests (52), README "how to read" section, settings comments, a visual legend page
+- [x] Live check in the desktop app (screenshot from Yasser: approved)
+- [ ] Publish 1.4.0, re-enable the installed plugin, remove the dev copy

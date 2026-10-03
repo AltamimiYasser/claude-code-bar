@@ -34,11 +34,11 @@ export const TEMPLATE = `// Bar settings. Changes apply within a few seconds; no
   // ── Bar above the prompt ──────────────────────────────────────────────
   "bar": {
     "enabled": true,              // false hides the whole bar (the turn timer, answer frame and Remote toggle keep working)
-    "hover": true,                // master switch for every hover effect in the bar: details, underlines, blue borders
-    "pillBorders": true           // the light colored outline around each pill
+    "hover": true,                // master switch for every hover effect in the bar: the details, the underlines
+    "pillBorders": true           // the faint outline around the bar's panel (desktop)
   },
 
-  // ── Context pill ──────────────────────────────────────────────────────
+  // ── Context (row 1) ───────────────────────────────────────────────────
   "context": {
     "enabled": true,
     "limit": null,                // tokens where the meter is full and red. null = the model's own context window.
@@ -47,22 +47,22 @@ export const TEMPLATE = `// Bar settings. Changes apply within a few seconds; no
     "click": "usage"              // what clicking "Context" does: "usage" (runs /usage) or "none"
   },
 
-  // ── Plan limits (5h and weekly) ───────────────────────────────────────
+  // ── Plan limits (5h and weekly, row 1) ────────────────────────────────
   "planLimits": {
-    "fiveHour": true,             // show the 5h pill
-    "weekly": true,               // show the Week pill
-    "resetTime": true,            // the "· 21:20" / "· Sat" after the percentage
-    "hoverDetails": true,         // exact reset date in line 2 while hovering a pill (needs bar.hover and turn.enabled)
-    "pace": true                  // "on pace for ~84%" in those hover details
+    "fiveHour": true,             // show the 5h meter
+    "weekly": true,               // show the Week meter
+    "resetTime": true,            // the "21:20" / "Sat" after the percentage
+    "hoverDetails": true,         // exact reset date over row 2 while hovering 5h or Week (needs bar.hover)
+    "pace": true                  // the "now" mark on those meters, and "on pace for ~84%" in their details
   },
 
-  // ── Line 2: the turn ──────────────────────────────────────────────────
+  // ── The turn (row 2) ──────────────────────────────────────────────────
   "turn": {
-    "enabled": true,              // false hides line 2 entirely (and with it the plan-limit hover details)
-    "whileWorking": true,         // live "● Working 1m 12s" while Claude works
+    "enabled": true,              // false hides the turn; the cache and Hand off keep row 2
+    "whileWorking": true,         // live "Working 1m 12s", its beat and output sparkline, while Claude works
     "lastTurn": true,             // "Last turn 37s" between turns
-    "tokens": true,               // the in / out / cache read / cache write figures
-    "toolCalls": true,            // the "9 tool calls" count on the right
+    "tokens": true,               // the out / read / write figures (hover the turn for all four)
+    "toolCalls": true,            // the "9 tools" count
     "toolCallsPanel": true        // clicking that count opens the Tool calls panel
   },
 
@@ -74,9 +74,9 @@ export const TEMPLATE = `// Bar settings. Changes apply within a few seconds; no
   },
   "spinnerTimer": true,           // live time beside the app's "working" indicator
 
-  // ── Prompt cache ──────────────────────────────────────────────────────
+  // ── Prompt cache (row 2) ──────────────────────────────────────────────
   "cache": {
-    "enabled": true,              // the Cache pill: time left before the conversation drops out of the prompt cache
+    "enabled": true,              // the Cache countdown: time left before the conversation drops out of the prompt cache
     "handoff": true               // the "Hand off" button beside it: writes a handoff and continues in a new session
   },
 

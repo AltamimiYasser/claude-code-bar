@@ -20,8 +20,9 @@ export type BarData = {
 }
 
 // The running turn's tokens so far: exact for each finished model request,
-// plus an estimate of the output still streaming in.
-export type LiveTurn = { tokens: Tokens; streaming: number; tools: number }
+// plus an estimate of the output still streaming in; and its output tokens
+// each second, oldest first, for the sparkline.
+export type LiveTurn = { tokens: Tokens; streaming: number; tools: number; rate: number[] }
 
 // One tool call of the main loop, for the Tool calls panel: what it was,
 // a one-line summary, and its input and output cut to a readable length.

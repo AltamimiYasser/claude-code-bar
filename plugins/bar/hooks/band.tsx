@@ -2,6 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type {
   EngineInterface,
   Register,
+  RenderChildren,
   SessionContextUsage,
   SessionRateLimit,
 } from 'claude-code'
@@ -9,6 +10,7 @@ import type {
 import type { BarData, Fill, Limit, BarSettings, Tokens, Turn } from '../types'
 import { cacheExpiry } from './cache'
 import { clockTime, colorFor, countdown, duration, longDate, resetTime, shortCount, until } from './format'
+import { hruleSvg, meterSvg, pulseSvg, restingSvg, ruleSvg, sparkSvg } from './meter'
 import { DEFAULTS, parseJsonc, SETTINGS_FILE, TEMPLATE, toSettings, withLimit } from './settings'
 import { liveSnapshot } from './turns'
 
@@ -24,7 +26,21 @@ const hasContent = (element: unknown) => {
 const MIN_LIMIT = 10_000
 // How often the settings file is checked for changes.
 const SETTINGS_POLL_MS = 3_000
-const CONTEXT_CELLS = 18
+// In the terminal the context meter is two runs of the line glyph sharing
+// whatever room the pill has left, in proportion: this many steps, each run
+// long enough to fill the widest band, and cut at its box's edge.
+const METER_STEPS = 1_000
+const METER_GLYPHS = 400
+// The desktop's meters, in CSS pixels: tall enough for the bead's glow.
+const METER_HEIGHT = 14
+const WINDOW_METER_WIDTH = 52
+const SPARK_WIDTH = 72
+// The terminal's window meters, in cells.
+const WINDOW_METER_CELLS = 6
+// The running turn's time never needs more than `59m 59s`.
+const TIMER_CELLS = 7
+// The terminal's `[-]` at the band's top right, and a space before it.
+const COLLAPSE_CELLS = 4
 const WINDOW_MS: Record<string, number> = {
   five_hour: 5 * 3_600_000,
   seven_day: 7 * 24 * 3_600_000,
@@ -45,16 +61,15 @@ const handoffAtom = atom({
   plugin: 'bar',
   key: 'handoff',
 } as const, { status: 'idle', path: null, clickedAt: null, turnId: null, detail: null })
-// All as wide as the widest, so the pill keeps its width as they change.
+// What the Hand off button says as the handoff goes along.
 const HANDOFF_LABELS = {
-  idle: 'Hand off',
+  idle: 'Hand off →',
   requested: 'Writing…',
   writing: 'Writing…',
   opening: 'Opening…',
   opened: 'Opened ✓',
   error: 'Failed',
 } as const
-const HANDOFF_CELLS = Math.max(...Object.values(HANDOFF_LABELS).map(label => label.length))
 // The countdown never needs more than `60:00`.
 const COUNTDOWN_CELLS = 5
 // Which sample /bar-demo shows in place of the live bar; -1 is the live bar.
@@ -110,20 +125,9 @@ const samples = (now: number): { label: string; data: BarData }[] => [
 
 const LIMIT_LABELS: Record<string, string> = { five_hour: '5h', seven_day: 'Week' }
 
-// The pill borders' colours, one per level the meters use.
-const TINTS: Record<string, string> = {
-  success: 'rgba(34, 160, 90, 0.28)',
-  warning: 'rgba(202, 138, 4, 0.30)',
-  claude: 'rgba(217, 119, 87, 0.32)',
-  error: 'rgba(220, 38, 38, 0.30)',
-}
-
-// A thin line meter: the used part in the level's colour, the rest a dim track.
-const line = (ratio: number, cells: number) => {
-  const used = Math.min(cells, Math.round(Math.min(Math.max(ratio, 0), 1) * cells))
-
-  return { used: '━'.repeat(used), rest: '━'.repeat(cells - used) }
-}
+// The panel's outline: a mid grey, faint, which reads on a light and a dark
+// background alike.
+const PANEL_BORDER = 'rgba(128, 128, 128, 0.32)'
 
 // `300k`, `1.5m`, `250000`: a token count as a person types one.
 const parseCount = (text: string) => {
@@ -297,6 +301,8 @@ export const registerBand: Register = on => {
     // What other mods draw here (cards, notices) stays, above the bar.
     const below = await next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
+    // The app surfaces draw SVG; the terminal has none and draws text instead.
+    const Svg = e.surface === 'terminal' ? null : $.ui.resolve(e).Svg
     const level = (ratio: number) => colorFor(ratio, s.levels)
     const current = await read($, fill)
     const allTurns = await read($, turnList)
@@ -304,9 +310,9 @@ export const registerBand: Register = on => {
     const lastDone = running ? undefined : allTurns.findLast(turn => turn.endedAt !== null)
     // While a turn runs the turn hooks ask for a redraw each second; the time
     // and tally are read here, at drawing, so they are current whenever it lands.
-    const elapsed = running ? (await $.clock.now()) - running.startedAt : 0
-    const liveTurn = running ? liveSnapshot() : null
     const now = await $.clock.now()
+    const elapsed = running ? now - running.startedAt : 0
+    const liveTurn = running ? liveSnapshot() : null
     const window = current?.window ?? null
     const cache = s.cache.enabled ? await read($, cacheAtom) : null
     const handoff = await read($, handoffAtom)
@@ -318,78 +324,174 @@ export const registerBand: Register = on => {
       limits: await read($, limits),
     }
 
-    // Line 1 is usage, each figure in a pill; line 2 is the turn (live while
-    // Claude works, else the last one). Hovering a pill shows its detail in
-    // line 2's place, which is why line 2 stays while it is on. A terminal
-    // draws a border as three rows, so there the pills go borderless.
+    // One panel, two rows: row 1 is capacity (context, the 5-hour and weekly
+    // windows), row 2 is right now (the turn, its tools, the prompt cache and
+    // Hand off). Every gauge is the same line meter. Hovering an item shows
+    // its detail laid over the other row, so nothing moves and the row under
+    // the pointer stays usable. A terminal draws a border as three rows, so
+    // there the panel goes borderless and the drawings become line glyphs.
     const isFramed = e.surface !== 'terminal'
-    const hasBorders = isFramed && s.bar.pillBorders
     const hasHover = s.bar.hover
-    const hasDetails = hasHover && s.planLimits.hoverDetails && s.turn.enabled
 
-    // A pill's detail, laid over line 2 while the pill is hovered: the same
-    // single row, on a solid background, so nothing moves or resizes. (The
-    // band clips anything drawn outside it, and growing it makes it jump.)
+    // A detail, laid over a row while its item is hovered: the same height,
+    // on a solid background. (The band clips anything drawn outside it, and
+    // growing it makes it jump.)
     const overlay = (scope: string, content: ReturnType<typeof Text>) => (
       <Box
         key={`${scope}-detail`}
         position="absolute"
         top={0}
+        bottom={0}
         left={0}
         right={0}
-        height={1}
         overflow="hidden"
         display="none"
         hover={{ scope, display: 'flex' }}
+        flexDirection="row"
+        alignItems="center"
         backgroundColor="userMessageBackground"
-        paddingX={isFramed ? 1 : 0}
       >
         {content}
       </Box>
     )
 
-    // A pill's border carries its figure's level colour (green, yellow,
-    // orange, red) at about a third strength: mid-tone colours, mostly
-    // transparent, so the same values read as a light tint on a light and a
-    // dark background alike. (Dimming a theme colour had no visible effect
-    // on the desktop.)
-    const border = (ratio: number) => TINTS[level(ratio)] ?? TINTS.success ?? 'inactive'
-
-    const pill = (
-      scope: string,
-      grow: boolean,
-      content: ReturnType<typeof Text> | ReturnType<typeof Box>,
-      borderColor: string,
-    ) => (
-      <Box
-        key={scope}
-        flexGrow={grow ? 1 : 0}
-        flexShrink={grow ? 1 : 0}
-        // A growing pill gives up its room to the fixed ones, down to nothing,
-        // instead of pushing the row past the edge.
-        {...(grow ? { minWidth: 0, overflow: 'hidden' as const } : {})}
-        paddingX={hasBorders ? 1 : 0}
-        {...(hasBorders ? { borderStyle: 'round', borderColor } : {})}
-        {...(hasHover ? { hover: hasBorders ? { scope, borderColor: 'suggestion' } : { scope } } : {})}
-      >
-        {content}
-      </Box>
-    )
-
-    const link = (key: string, label: string, onPress: () => unknown) => (
+    const link = (key: string, label: string, onPress: () => unknown, dim = false) => (
       <Button
         key={key}
         label={label}
         plain
+        {...(dim ? { dimColor: true } : {})}
         {...(hasHover ? { hover: { scope: `bar-link-${key}`, underline: true } } : {})}
         onPress={onPress}
       />
     )
 
-    const windowDetail = (window: Limit) => {
+    // An item of a row; its key is the hover scope its detail answers to.
+    const segment = (scope: string, grow: boolean, content: RenderChildren[]) => (
+      <Box
+        key={scope}
+        flexDirection="row"
+        alignItems="center"
+        columnGap={1}
+        flexGrow={grow ? 1 : 0}
+        flexShrink={grow ? 1 : 0}
+        // A growing item gives up its room to the fixed ones, down to nothing,
+        // instead of pushing the row past the edge.
+        {...(grow ? { minWidth: 0, overflow: 'hidden' as const } : {})}
+        {...(hasHover ? { hover: { scope } } : {})}
+      >
+        {content}
+      </Box>
+    )
+
+    // The hairline between items. It never shrinks: when the row is short of
+    // room the context meter gives way, and a shrinking hairline rounded
+    // down to nothing.
+    const rule = (key: string) => (
+      <Box key={key} flexShrink={0}>
+        {Svg ? (
+          <Svg source={ruleSvg()} alt="│" width={1} height={16} />
+        ) : (
+          <Text dimColor>│</Text>
+        )}
+      </Box>
+    )
+
+    // The context meter fills the room between its label and its figures, so
+    // the figures always show. The app draws it as one stretching SVG line
+    // (meter.ts). The terminal splits its room between two glyph runs by
+    // ratio, the used part in the level's colour and the rest a dim track, so
+    // the meter stays true at any width.
+    const contextMeter = (ratio: number) => {
+      if (Svg) {
+        return (
+          <Box
+            key="context-meter"
+            flexDirection="column"
+            justifyContent="center"
+            alignItems="stretch"
+            flexGrow={1}
+            flexShrink={1}
+            minWidth={0}
+            height={1}
+            marginX={1}
+          >
+            <Svg
+              source={meterSvg(ratio, level(ratio), { ticks: [s.levels.yellow, s.levels.orange, s.levels.red] })}
+              alt={`${Math.round(ratio * 100)}% of the context used`}
+              height={METER_HEIGHT}
+            />
+          </Box>
+        )
+      }
+
+      const used = Math.round(Math.min(Math.max(ratio, 0), 1) * METER_STEPS)
+      const run = '━'.repeat(METER_GLYPHS)
+      const part = (key: string, grow: number, dim: boolean) => (
+        <Box key={key} flexGrow={grow} flexShrink={1} width={0} minWidth={0} height={1} overflow="hidden">
+          <Text color={level(ratio)} dimColor={dim}>
+            {run}
+          </Text>
+        </Box>
+      )
+
+      return (
+        <Box key="context-meter" flexDirection="row" flexGrow={1} flexShrink={1} minWidth={0} height={1} overflow="hidden" marginX={1}>
+          {used > 0 && part('context-used', used, false)}
+          {used < METER_STEPS && part('context-rest', METER_STEPS - used, true)}
+        </Box>
+      )
+    }
+
+    // A plan window's short meter, with a "now" mark at how much of the
+    // window has passed: fill beyond it means usage is ahead of the clock.
+    const windowMeter = (key: string, ratio: number, cursor: number | null) => {
+      if (Svg) {
+        return (
+          <Box key={key} flexShrink={0}>
+            <Svg
+              source={meterSvg(ratio, level(ratio), { cursor, pad: 5 })}
+              alt={`${Math.round(ratio * 100)}% used${cursor === null ? '' : `, ${Math.round(cursor * 100)}% of the window passed`}`}
+              width={WINDOW_METER_WIDTH}
+              height={METER_HEIGHT}
+            />
+          </Box>
+        )
+      }
+
+      const used = Math.round(Math.min(Math.max(ratio, 0), 1) * WINDOW_METER_CELLS)
+      const mark = cursor === null ? -1 : Math.min(WINDOW_METER_CELLS - 1, Math.floor(cursor * WINDOW_METER_CELLS))
+
+      return (
+        <Text key={key}>
+          {Array.from({ length: WINDOW_METER_CELLS }, (_, cell) =>
+            cell === mark ? (
+              <Text key={String(cell)}>┃</Text>
+            ) : cell < used ? (
+              <Text key={String(cell)} color={level(ratio)}>
+                ━
+              </Text>
+            ) : (
+              <Text key={String(cell)} dimColor>
+                ─
+              </Text>
+            ),
+          )}
+        </Text>
+      )
+    }
+
+    // How much of a window has passed, or null when unknown or turned off.
+    const windowShare = (window: Limit) => {
       const span = WINDOW_MS[window.kind] ?? 0
       const resetsAt = window.resetsAt ? Date.parse(window.resetsAt) : null
-      const share = resetsAt && span ? (now - (resetsAt - span)) / span : 0
+
+      return resetsAt && span ? Math.min(Math.max((now - (resetsAt - span)) / span, 0), 1) : null
+    }
+
+    const windowDetail = (window: Limit) => {
+      const resetsAt = window.resetsAt ? Date.parse(window.resetsAt) : null
+      const share = windowShare(window) ?? 0
       // Where usage lands at reset if it keeps the pace it has had so far;
       // too early in the window to say anything useful before a tenth of it.
       const pace = s.planLimits.pace && share >= 0.1 ? Math.round(window.percent / share) : null
@@ -406,7 +508,8 @@ export const registerBand: Register = on => {
           {resetsAt && (
             <Text>
               <Text color={tint} dimColor>
-                {'  ·  resets '}
+                {'  ·  '}
+                {Math.round(share * 100)}% of the window passed{'  ·  '}resets{' '}
               </Text>
               {longDate(resetsAt)}
               <Text color={tint} dimColor>
@@ -424,127 +527,193 @@ export const registerBand: Register = on => {
       )
     }
 
-    // A count in the normal text colour beside its label in a faint blue,
-    // the accent the turn's duration is drawn in.
-    const figure = (key: string, value: string, label: string, first = false) => (
-      <Text key={key}>
-        {!first && <Text color="suggestion" dimColor>{'  ·  '}</Text>}
-        <Text>{value}</Text>
-        <Text color="suggestion" dimColor>
-          {' '}
-          {label}
-        </Text>
-      </Text>
-    )
+    const contextDetail = (data: BarData) => {
+      const ratio = data.tokens / data.limit
+      const tint = level(ratio)
 
-    const tokenFigures = (tokens: Tokens, streaming = 0) =>
-      s.turn.tokens
-        ? [
-            figure('in', shortCount(tokens.input), 'in'),
-            figure('out', `${shortCount(tokens.output + streaming)}${streaming > 0 ? '+' : ''}`, 'out'),
-            figure('read', shortCount(tokens.cacheRead), 'cache read'),
-            figure('write', shortCount(tokens.cacheWrite), 'cache write'),
-          ]
-        : null
-
-    const toolFigure = (tools: number) => {
-      if (!s.turn.toolCalls) {
-        return null
-      }
-
-      const label = `${tools} ${tools === 1 ? 'tool call' : 'tool calls'}`
-
-      return (
-        <Box key="tools-slot" flexGrow={1} flexShrink={0} justifyContent="flex-end" paddingLeft={3}>
-          {s.turn.toolCallsPanel
-            ? link('tools', label, () => $.ui.open({ id: 'bar-tools', title: 'Tool calls', focus: true }))
-            : figure('tools', String(tools), tools === 1 ? 'tool call' : 'tool calls', true)}
-        </Box>
+      return overlay(
+        'bar-context',
+        <Text wrap="truncate-end">
+          <Text bold>Context window</Text>
+          <Text color={tint} dimColor>
+            {'  ·  '}
+          </Text>
+          <Text color={tint}>
+            {shortCount(data.tokens)} of {shortCount(data.limit)} tokens ({Math.round(ratio * 100)}%)
+          </Text>
+          <Text dimColor>
+            {'  ·  '}
+            {s.context.limit === null ? "the model's full window" : 'your limit, set with /bar-limit'}
+            {s.context.click === 'usage' ? '  ·  click Context for /usage' : ''}
+          </Text>
+        </Text>,
       )
     }
 
-    // The turn at the left of line 2, where it stays in view as replies
-    // scroll: live while Claude works, else the last finished one.
-    const turnLine = () => {
+    // The turn's figures, the number in the text colour and its label quiet.
+    const figures = (tokens: Tokens, streaming = 0) =>
+      s.turn.tokens && (
+        <Text key="turn-figures">
+          {(
+            [
+              [`${shortCount(tokens.output + streaming)}${streaming > 0 ? '+' : ''}`, 'out'],
+              [shortCount(tokens.cacheRead), 'read'],
+              [shortCount(tokens.cacheWrite), 'write'],
+            ] as const
+          ).map(([value, label], index) => (
+            <Text key={label}>
+              {index > 0 ? '   ' : ''}
+              {value}
+              <Text dimColor> {label}</Text>
+            </Text>
+          ))}
+        </Text>
+      )
+
+    // The turn at the left of row 2, where it stays in view as replies
+    // scroll: live while Claude works (a beat each second, the time, the
+    // output rate), else the last finished one.
+    const turnContent = (): RenderChildren[] => {
       if (running && s.turn.whileWorking) {
+        const spark = Svg && liveTurn ? sparkSvg(liveTurn.rate, 'claude') : null
+
         return [
-          <Box key="turn" flexShrink={1} overflow="hidden">
-            <Text wrap="truncate-end">
-              <Text color="claude">● </Text>
-              <Text>Working </Text>
-              <Text color="suggestion" bold>
-                {duration(elapsed)}
-              </Text>
-              {liveTurn && tokenFigures(liveTurn.tokens, liveTurn.streaming)}
+          Svg ? (
+            <Svg key="beat" source={pulseSvg('claude')} alt="Working" width={14} height={14} />
+          ) : (
+            <Text key="beat" color="claude">
+              ●
+            </Text>
+          ),
+          <Text key="state" bold>
+            Working
+          </Text>,
+          // Fixed width: the time changes every second, and the app's font
+          // gives digits different widths.
+          <Box key="time" width={TIMER_CELLS} flexShrink={0}>
+            <Text color="claude" bold>
+              {duration(elapsed)}
             </Text>
           </Box>,
-          toolFigure(liveTurn?.tools ?? 0),
+          Svg && spark && (
+            <Box key="spark" flexShrink={0}>
+              <Svg source={spark} alt="Output tokens each second" width={SPARK_WIDTH} height={16} />
+            </Box>
+          ),
+          liveTurn && figures(liveTurn.tokens, liveTurn.streaming),
         ]
       }
 
       if (!running && lastDone?.endedAt && s.turn.lastTurn) {
-        const last: Turn = lastDone
-
         return [
-          <Box key="turn" flexShrink={1} overflow="hidden">
-            <Text wrap="truncate-end">
-              <Text color="suggestion" dimColor>
-                Last turn{' '}
-              </Text>
-              <Text color="suggestion">{duration((last.endedAt ?? 0) - last.startedAt)}</Text>
-              {last.tokens && tokenFigures(last.tokens)}
+          Svg ? (
+            <Svg key="beat" source={restingSvg()} alt="Idle" width={14} height={14} />
+          ) : (
+            <Text key="beat" dimColor>
+              ○
             </Text>
-          </Box>,
-          // Turns from before tool calls were counted carry no figure.
-          typeof last.tools === 'number' ? toolFigure(last.tools) : null,
+          ),
+          <Text key="state" dimColor>
+            Last turn
+          </Text>,
+          <Text key="time" bold>
+            {duration(lastDone.endedAt - lastDone.startedAt)}
+          </Text>,
+          lastDone.tokens && figures(lastDone.tokens),
         ]
       }
 
-      return null
+      return []
+    }
+
+    // Every figure of the turn, by its full name.
+    const turnDetail = () => {
+      const tokens = running ? liveTurn?.tokens : lastDone?.tokens
+      const tools = running ? liveTurn?.tools : lastDone?.tools
+
+      return (
+        s.turn.tokens &&
+        tokens &&
+        overlay(
+          'bar-turn',
+          <Text wrap="truncate-end">
+            <Text bold>{running ? 'This turn so far' : 'Last turn'}</Text>
+            <Text dimColor>{'  ·  '}</Text>
+            {shortCount(tokens.input)}
+            <Text dimColor> in{'  ·  '}</Text>
+            {shortCount(tokens.output)}
+            <Text dimColor> out{'  ·  '}</Text>
+            {shortCount(tokens.cacheRead)}
+            <Text dimColor> cache read{'  ·  '}</Text>
+            {shortCount(tokens.cacheWrite)}
+            <Text dimColor> cache write</Text>
+            {s.turn.toolCalls && typeof tools === 'number' && (
+              <Text dimColor>
+                {'  ·  '}
+                {tools} tool {tools === 1 ? 'call' : 'calls'}
+              </Text>
+            )}
+          </Text>,
+        )
+      )
+    }
+
+    const toolsItem = (tools: number) => {
+      if (!s.turn.toolCalls) {
+        return null
+      }
+
+      const label = `${tools} ${tools === 1 ? 'tool' : 'tools'}`
+
+      return (
+        <Box key="tools-slot" flexShrink={0}>
+          {s.turn.toolCallsPanel ? (
+            link('tools', `${label} ›`, () => $.ui.open({ id: 'bar-tools', title: 'Tool calls', focus: true }))
+          ) : (
+            <Text>{label}</Text>
+          )}
+        </Box>
+      )
     }
 
     // The prompt cache: time left before the conversation drops out of it,
-    // counted from the last response, and the Hand off button beside it.
+    // counted from the last response, and the Hand off button beside it,
+    // drawn as the main action once the time is running out.
     const expiry = cacheExpiry(cache)
     const cacheSpan = cache ? expiry! - cache.at : 1
     const cacheLeft = expiry === null ? 0 : expiry - now
     const cacheRatio = 1 - Math.max(cacheLeft, 0) / cacheSpan
     const cacheTint = cacheLeft > 0 ? level(cacheRatio) : 'error'
+    const isCacheUrgent = cacheTint === 'claude' || cacheTint === 'error'
 
-    const cachePill = () =>
-      cache &&
-      pill(
-        'bar-cache',
-        false,
-        <Box flexDirection="row">
-          <Text>Cache  </Text>
-          {/* Fixed widths: the digits change every second, and the app's font gives them different widths. */}
-          <Box width={Math.max(COUNTDOWN_CELLS, 'expired'.length)}>
-            <Text color={cacheTint}>{cacheLeft > 0 ? countdown(cacheLeft) : 'expired'}</Text>
-          </Box>
-          {s.cache.handoff && (
-            <Box flexDirection="row">
-              <Text color={cacheTint} dimColor>
-                {'  ·  '}
-              </Text>
-              <Box width={HANDOFF_CELLS}>
-                {link(
-                  'handoff',
-                  HANDOFF_LABELS[handoff.status],
-                  // The cache hooks start it on their next tick.
-                  () =>
-                    update($, handoffAtom, state =>
-                      state.status === 'idle' || state.status === 'error' || state.status === 'opened'
-                        ? { ...state, status: 'requested' as const }
-                        : state,
-                    ),
-                )}
-              </Box>
-            </Box>
-          )}
+    const cacheItem = () =>
+      segment('bar-cache', false, [
+        <Text key="label" dimColor>
+          Cache
+        </Text>,
+        // Fixed width: the digits change every second.
+        <Box key="left" width={Math.max(COUNTDOWN_CELLS, 'expired'.length)} flexShrink={0}>
+          <Text color={cacheTint} bold>
+            {cacheLeft > 0 ? countdown(cacheLeft) : 'expired'}
+          </Text>
         </Box>,
-        border(cacheLeft > 0 ? cacheRatio : 1),
-      )
+      ])
+
+    const handoffButton = () => (
+      <Button
+        key="handoff"
+        label={HANDOFF_LABELS[handoff.status]}
+        variant={isCacheUrgent ? 'primary' : 'secondary'}
+        // The cache hooks start it on their next tick.
+        onPress={() =>
+          update($, handoffAtom, state =>
+            state.status === 'idle' || state.status === 'error' || state.status === 'opened'
+              ? { ...state, status: 'requested' as const }
+              : state,
+          )
+        }
+      />
+    )
 
     const cacheDetail = () =>
       cache &&
@@ -579,72 +748,120 @@ export const registerBand: Register = on => {
 
     const bar = (data: BarData) => {
       const ratio = data.tokens / data.limit
-      const context = line(ratio, CONTEXT_CELLS)
       const windows = data.limits.filter(window =>
         window.kind === 'five_hour' ? s.planLimits.fiveHour : s.planLimits.weekly,
       )
       const contextLabel =
         s.context.click === 'usage' ? (
-          link('context', 'Context', () => $.command.run({ command: 'usage', args: '' }))
+          link('context', 'Context', () => $.command.run({ command: 'usage', args: '' }), true)
         ) : (
-          <Text key="context-label">Context</Text>
+          <Text key="context-label" dimColor>
+            Context
+          </Text>
         )
-      const hasLine1 = s.context.enabled || windows.length > 0 || cache !== null
+
+      const capacity: RenderChildren[] = []
+
+      if (s.context.enabled) {
+        capacity.push(
+          segment('bar-context', true, [
+            contextLabel,
+            contextMeter(ratio),
+            // Never shrinks: the meter gives up its room first.
+            <Box key="context-figures" flexShrink={0}>
+              <Text>
+                <Text color={level(ratio)} bold>
+                  {shortCount(data.tokens)}
+                </Text>
+                <Text dimColor> / {shortCount(data.limit)}  </Text>
+                <Text color={level(ratio)}>{Math.round(ratio * 100)}%</Text>
+              </Text>
+            </Box>,
+          ]),
+        )
+      }
+
+      for (const window of windows) {
+        const tint = level(window.percent / 100)
+
+        capacity.push(
+          segment(`bar-${window.kind}`, false, [
+            <Text key="label" dimColor>
+              {LIMIT_LABELS[window.kind]}
+            </Text>,
+            windowMeter('meter', window.percent / 100, s.planLimits.pace ? windowShare(window) : null),
+            <Text key="percent" color={tint} bold>
+              {Math.round(window.percent)}%
+            </Text>,
+            s.planLimits.resetTime && window.resetsAt && (
+              <Text key={`bar-${window.kind}-reset`} dimColor>
+                {resetTime(window.resetsAt, now)}
+              </Text>
+            ),
+          ]),
+        )
+      }
+
+      const tools = running ? (liveTurn?.tools ?? 0) : lastDone?.tools
+      const nowItems: RenderChildren[] = []
+
+      const turn = s.turn.enabled ? turnContent() : []
+
+      if (turn.length > 0) {
+        nowItems.push(segment('turn', true, turn))
+        if (typeof tools === 'number') {
+          nowItems.push(toolsItem(tools))
+        }
+      } else if (cache) {
+        // Without the turn, the cache keeps to the right.
+        nowItems.push(<Box key="turn-space" flexGrow={1} />)
+      }
+
+      if (cache) {
+        nowItems.push(cacheItem())
+      }
+
+      const hasCapacity = capacity.length > 0
+      const hasNow = nowItems.length > 0
+      // Items with a hairline between each.
+      const withRules = (row: string, items: RenderChildren[]) =>
+        items.flatMap((item, index) => (index > 0 ? [rule(`${row}-rule-${index}`), item] : [item]))
 
       return (
-        <Box flexDirection="column">
-          {hasLine1 && (
-            <Box flexDirection="row" columnGap={1}>
-              {s.context.enabled &&
-                pill(
-                  'bar-context',
-                  true,
-                  <Box flexDirection="row">
-                    {contextLabel}
-                    <Box flexShrink={1} height={1} overflow="hidden">
-                      <Text wrap="truncate-end">
-                        <Text>{'  '}</Text>
-                        <Text color={level(ratio)}>{context.used}</Text>
-                        <Text color={level(ratio)} dimColor>
-                          {context.rest}
-                        </Text>
-                        <Text color={level(ratio)} bold>
-                          {'  '}
-                          {shortCount(data.tokens)}
-                        </Text>
-                        <Text color={level(ratio)} dimColor>
-                          {' '}/ {shortCount(data.limit)}
-                        </Text>
-                      </Text>
-                    </Box>
-                  </Box>,
-                  border(ratio),
-                )}
-              {windows.map(window =>
-                pill(
-                  `bar-${window.kind}`,
-                  false,
-                  <Text>
-                    <Text>{LIMIT_LABELS[window.kind]}  </Text>
-                    <Text color={level(window.percent / 100)}>{Math.round(window.percent)}%</Text>
-                    {s.planLimits.resetTime && window.resetsAt && (
-                      <Text color={level(window.percent / 100)} dimColor>
-                        {' '}· {resetTime(window.resetsAt, now)}
-                      </Text>
-                    )}
-                  </Text>,
-                  border(window.percent / 100),
-                ),
-              )}
-              {cachePill()}
+        <Box
+          key="bar-panel"
+          flexDirection="column"
+          {...(isFramed && s.bar.pillBorders ? { borderStyle: 'round', borderColor: PANEL_BORDER, paddingX: 1 } : {})}
+        >
+          {hasCapacity && (
+            // The terminal draws the band's collapse control, `[-]`, over the
+            // right end of the first row: keep those cells clear.
+            <Box
+              key="row-capacity"
+              flexDirection="row"
+              alignItems="center"
+              columnGap={1}
+              minHeight={1}
+              paddingRight={isFramed ? 0 : COLLAPSE_CELLS}
+            >
+              {withRules('capacity', capacity)}
+              {/* Last, so they paint over the row when shown: row 2's details. */}
+              {hasHover && hasNow && cacheDetail()}
+              {hasHover && hasNow && s.turn.enabled && turnDetail()}
             </Box>
           )}
-          {s.turn.enabled && (
-            <Box flexDirection="row" paddingX={isFramed ? 1 : 0} height={1} overflow="hidden">
-              {turnLine()}
-              {/* Last, so they paint over line 2 when shown. */}
-              {hasDetails && windows.map(window => windowDetail(window))}
-              {hasHover && s.turn.enabled && cacheDetail()}
+          {hasCapacity && hasNow && Svg && (
+            <Box key="row-rule" flexDirection="column" alignItems="stretch" marginY={0}>
+              <Svg source={hruleSvg()} alt="—" height={1} />
+            </Box>
+          )}
+          {hasNow && (
+            <Box key="row-now" flexDirection="row" alignItems="center" columnGap={1} minHeight={1}>
+              {withRules('now', nowItems.filter(item => item !== null))}
+              {cache && s.cache.handoff && handoffButton()}
+              {/* Row 1's details. */}
+              {hasHover && hasCapacity && s.context.enabled && contextDetail(data)}
+              {hasHover && hasCapacity && s.planLimits.hoverDetails && windows.map(window => windowDetail(window))}
             </Box>
           )}
         </Box>

@@ -58,6 +58,21 @@ const noTokens = (): Tokens => ({ input: 0, output: 0, cacheRead: 0, cacheWrite:
 let tally = noTokens()
 let streamingChars = 0
 let toolCalls = 0
+// Output tokens each second of the running turn, for the bar's sparkline:
+// the newest last, at most `RATE_SAMPLES` of them.
+const RATE_SAMPLES = 24
+let rate: number[] = []
+let lastOutput = 0
+
+const outputSoFar = () => tally.output + Math.round(streamingChars / CHARS_PER_TOKEN)
+
+// One sample a second. A finished request swaps its estimate for the exact
+// count, which can land a little under it: never a negative rate.
+const sampleRate = () => {
+  const output = outputSoFar()
+  rate = [...rate, Math.max(0, output - lastOutput)].slice(-RATE_SAMPLES)
+  lastOutput = output
+}
 
 const normalize = (text: string) => text.replace(/\s+/g, ' ').trim()
 
@@ -85,6 +100,7 @@ export const liveSnapshot = (): LiveTurn => ({
   tokens: { ...tally },
   streaming: Math.round(streamingChars / CHARS_PER_TOKEN),
   tools: toolCalls,
+  rate: [...rate],
 })
 
 export const registerTurns: Register = on => {
@@ -109,6 +125,8 @@ export const registerTurns: Register = on => {
     tally = noTokens()
     streamingChars = 0
     toolCalls = 0
+    rate = []
+    lastOutput = 0
     await update($, calls, () => [])
     await update($, openCalls, () => [])
 
@@ -118,7 +136,10 @@ export const registerTurns: Register = on => {
     // (Writing them to state instead made every tick wait for a redraw to
     // land, a second or more on the desktop, so ticks were skipped and the
     // timer moved in 2-second steps.)
-    tick = $.clock.every(1000, () => $.ui.invalidate('ui.render'))
+    tick = $.clock.every(1000, () => {
+      sampleRate()
+      $.ui.invalidate('ui.render')
+    })
 
     return next(e)
   })
