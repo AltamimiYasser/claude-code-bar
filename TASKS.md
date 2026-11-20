@@ -56,3 +56,10 @@
 - [x] Tests (54), README, checked live in the terminal beside the Mizaniah mod (`CI ✓ Sessions 🔴 Remote`; the button opens and closes its panel, also mid-turn)
 - [ ] Live check in the desktop app
 - [x] Published 1.4.2 and installed
+
+# Bar 1.4.3: Arabic answers read right to left in the frame
+
+- [x] The frame keeps the app's own drawing of the answer (`await next(e)`) instead of a plugin `Markdown`, which has no reading direction and drew Arabic left to right
+- [x] Tests (55): the app's drawing, its direction included, stays inside the frame and without it
+- [ ] Published 1.4.3 and installed
+- [ ] Live check in the desktop app with an Arabic answer

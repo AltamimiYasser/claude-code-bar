@@ -416,9 +416,34 @@ describe('answer and spinner', () => {
     props: { text: 'The final answer.', isFirstOfReply: true },
   } as const
 
+  // The app's own drawing of the answer, which the frame keeps inside it.
+  const appDrawsAnswer = (on: Parameters<Parameters<typeof test>[1]>[1]) =>
+    on('ui.render', ($, e) => {
+      const { Text } = $.ui.resolve(e)
+      return <Text dir="rtl">{`app: ${(e.props as { text: string }).text}`}</Text>
+    })
+
+  test('the frame keeps the app’s own drawing of the answer, so its reading direction stays', async ($, on) => {
+    const put = memoryState(on)
+    mock.clock(on, { now: NOW })
+    appDrawsAnswer(on)
+    await seed(put)
+    let ui = await $.ui.mount(ANSWER)
+    expect(await ui.find({ type: 'Text', text: /Answer/ })).toBeDefined()
+    expect((await ui.find({ type: 'Text', text: 'app: The final answer.' }))?.props.dir).toBe('rtl')
+    expect(await ui.find({ type: 'Markdown' })).toBeUndefined()
+    await ui.unmount()
+
+    await seed(put, { answer: { frame: false } })
+    ui = await $.ui.mount(ANSWER)
+    expect(await ui.find({ type: 'Text', text: 'app: The final answer.' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /Done in/ })).toBeDefined()
+  })
+
   test('answer.frame, footer and footerTokens each switch their part', async ($, on) => {
     const put = memoryState(on)
     mock.clock(on, { now: NOW })
+    appDrawsAnswer(on)
     await seed(put)
     let ui = await $.ui.mount(ANSWER)
     expect(await ui.find({ type: 'Text', text: /Answer/ })).toBeDefined()

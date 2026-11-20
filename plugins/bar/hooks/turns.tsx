@@ -281,9 +281,14 @@ export const registerTurns: Register = on => {
       return next(e)
     }
 
-    const { Box, Text, Markdown } = $.ui.resolve(e)
+    const { Box, Text } = $.ui.resolve(e)
 
     const { tokens } = turn
+
+    // The app's own drawing of the answer, kept inside the frame: it sets each
+    // paragraph's reading direction from its first letter, so Arabic stays
+    // right to left. A plugin `Markdown` has no direction and draws it LTR.
+    const body = await next(e)
 
     return (
       <Box flexDirection="column" marginTop={1}>
@@ -295,10 +300,10 @@ export const registerTurns: Register = on => {
             paddingX={1}
           >
             <Text color="claude">✻ Answer</Text>
-            <Markdown text={e.props.text} />
+            {body}
           </Box>
         ) : (
-          <Markdown text={e.props.text} />
+          body
         )}
         {answer.footer && (
           <Box marginTop={1} paddingX={answer.frame ? 1 : 0} flexDirection="row" justifyContent="space-between">
