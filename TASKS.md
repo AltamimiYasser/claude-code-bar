@@ -61,5 +61,5 @@
 
 - [x] The frame keeps the app's own drawing of the answer (`await next(e)`) instead of a plugin `Markdown`, which has no reading direction and drew Arabic left to right
 - [x] Tests (55): the app's drawing, its direction included, stays inside the frame and without it
-- [ ] Published 1.4.3 and installed
+- [x] Published 1.4.3 and installed
 - [ ] Live check in the desktop app with an Arabic answer
